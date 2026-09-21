@@ -156,17 +156,19 @@ namespace
                 return false;
             s.planActive = true;
             s.quotaKnown = !value["quota"].empty();
-            s.quotaAvailable = true;
-            double remaining = 100.0;
+            s.quotaAvailable = false;
+            double remaining = 0.0;
             long long longestReset = 0;
             for (const auto& [_, quota] : value["quota"].items())
                 if (quota.is_object() && quota.contains("remaining_fraction"))
                 {
                     const double percent = std::clamp(quota.value("remaining_fraction", 0.0) * 100.0, 0.0, 100.0);
-                    remaining = std::min(remaining, percent);
+                    // Model families use independent pools. The agent remains
+                    // routable while at least one family has capacity.
+                    remaining = std::max(remaining, percent);
+                    s.quotaAvailable = s.quotaAvailable || percent > 0.0;
                     if (percent <= 0.0)
                     {
-                        s.quotaAvailable = false;
                         longestReset = std::max(longestReset, quota.value("reset_in_seconds", 0LL));
                         if (quota.contains("reset_time") && quota["reset_time"].is_string())
                             s.resetsAt = quota["reset_time"].get<std::string>();
@@ -182,9 +184,9 @@ namespace
                 return false;
             }
             s.remainingPercent = remaining;
-            s.detail = s.quotaAvailable ? "forfait Antigravity " + s.plan + " · " +
-                                           std::to_string(static_cast<int>(remaining + 0.5)) + "% disponible"
-                                        : "quota Antigravity épuisé";
+            s.detail = s.quotaAvailable ? "forfait Antigravity " + s.plan + " · au moins une famille disponible (" +
+                                           std::to_string(static_cast<int>(remaining + 0.5)) + "%)"
+                                        : "tous les quotas Antigravity sont épuisés";
             return true;
         }
         catch (...) { return false; }
@@ -195,7 +197,8 @@ namespace
         // Preserve explicit Antigravity model ids. Migrate the retired Gemini
         // CLI catalogue transparently for existing settings.json files.
         if (configured.rfind("gemini-3.8-", 0) == 0 || configured.rfind("gemini-3.7-", 0) == 0 ||
-            configured.rfind("gemini-3.6-", 0) == 0 || configured.rfind("gemini-3.1-pro-", 0) == 0)
+            configured.rfind("gemini-3.6-", 0) == 0 || configured.rfind("gemini-3.1-pro-", 0) == 0 ||
+            configured.rfind("gpt-oss-", 0) == 0 || configured.rfind("claude-", 0) == 0)
             return configured;
         const std::string l = Lower(configured);
         if (l.find("pro") != std::string::npos)
@@ -203,6 +206,27 @@ namespace
         if (l.find("lite") != std::string::npos)
             return "gemini-3.8-flash-low";
         return "gemini-3.8-flash-medium";
+    }
+
+    std::vector<std::string> AntigravityFallbackModels(const std::string& configured)
+    {
+        const std::string preferred = AntigravityModel(configured);
+        std::vector<std::string> models = {preferred};
+        // Antigravity keeps separate allowance pools for the Gemini, GPT-OSS
+        // and Claude families. A 429 on one family must not take the whole
+        // agent offline while another pool can still answer.
+        for (const char* candidate : {"gpt-oss-120b-medium", "claude-sonnet-4-6"})
+            if (preferred != candidate)
+                models.emplace_back(candidate);
+        return models;
+    }
+
+    std::string AntigravityCodeModel(const std::string& configured)
+    {
+        const std::string model = AntigravityModel(configured);
+        // Research/code work delegated to Antigravity must stay on Gemini.
+        // Claude and GPT-OSS are chat fallbacks only.
+        return model.rfind("gemini-", 0) == 0 ? model : "gemini-3.1-pro-low";
     }
 
     // ---- Claude Code --------------------------------------------------------------------
@@ -403,36 +427,42 @@ namespace
             const std::string input = "<instructions>\n" + req.systemPrompt +
                                       "\nTu es dans un salon de discussion : ne modifie aucun fichier et "
                                       "n'exécute aucune commande.\n</instructions>\n\n" + req.prompt;
-            std::vector<std::wstring> args = {gemini.exe, L"-p", Platform::Widen(input), L"--output-format", L"json",
-                                               L"--disable-slash-commands", L"--model",
-                                               Platform::Widen(AntigravityModel(req.model)), L"--print-timeout", L"300s"};
-            std::string output;
-            const Process::Result p = Process::Run(args, req.workDir, "", [&](const std::string& line) {
-                output += line;
-                output += '\n';
-            }, cancel, {}, 330);
-            if (!p.started) { r.error = p.error; return r; }
-            if (p.cancelled) { r.error = "arrêté"; return r; }
-            try
+            std::string failures;
+            for (const std::string& model : AntigravityFallbackModels(req.model))
             {
-                const json result = json::parse(output);
-                const std::string status = result.value("status", "");
-                const std::string response = result.value("response", "");
-                if (status != "SUCCESS" || response.empty())
+                std::vector<std::wstring> args = {gemini.exe, L"-p", Platform::Widen(input), L"--output-format", L"json",
+                                                   L"--disable-slash-commands", L"--model", Platform::Widen(model),
+                                                   L"--print-timeout", L"300s"};
+                std::string output;
+                const Process::Result p = Process::Run(args, req.workDir, "", [&](const std::string& line) {
+                    output += line;
+                    output += '\n';
+                }, cancel, {}, 330);
+                if (!p.started) { r.error = p.error; return r; }
+                if (p.cancelled) { r.error = "arrêté"; return r; }
+                try
                 {
-                    ClassifyError(r, result.value("error", std::string("Antigravity n'a renvoyé aucune réponse.")));
-                    return r;
+                    const json result = json::parse(output);
+                    const std::string response = result.value("response", "");
+                    if (result.value("status", "") == "SUCCESS" && !response.empty())
+                    {
+                        r.ok = true;
+                        r.text = response;
+                        r.reason = "modèle Antigravity : " + model;
+                        onChunk(response);
+                        return r;
+                    }
+                    const std::string error = result.value("error", std::string("aucune réponse"));
+                    failures += (failures.empty() ? "" : " | ") + model + " : " + Shorten(error, 180);
                 }
-                r.ok = true;
-                r.text = response;
-                onChunk(response);
-                return r;
+                catch (...)
+                {
+                    failures += (failures.empty() ? "" : " | ") + model + " : " +
+                                (p.exitCode == 0 ? "réponse JSON invalide" : Shorten(p.stderrText, 180));
+                }
             }
-            catch (...)
-            {
-                ClassifyError(r, p.exitCode == 0 ? "Réponse JSON Antigravity invalide." : Shorten(p.stderrText));
-                return r;
-            }
+            ClassifyError(r, failures.empty() ? "Tous les modèles Antigravity ont échoué." : failures);
+            return r;
         }
         // Deny every tool: in chat mode Gemini only talks.
         const fs::path policy = fs::path(req.workDir) / L"deny-all-tools.toml";
@@ -869,6 +899,39 @@ TurnResult RunCodeWork(const std::string& aiId, const std::string& model, const 
             r.error = "Gemini CLI est introuvable.";
             return r;
         }
+        if (IsAntigravity(a))
+        {
+            const std::string prompt = instructions +
+                "\n\nTravaille uniquement dans le dossier de projet courant. "
+                "Tu peux modifier les fichiers demandés, mais n'exécute aucune commande système.";
+            std::vector<std::wstring> args = {a.exe, L"-p", Platform::Widen(prompt),
+                                               L"--output-format", L"json", L"--disable-slash-commands",
+                                               L"--mode", L"accept-edits", L"--sandbox", L"--model",
+                                               Platform::Widen(AntigravityCodeModel(model)),
+                                               L"--print-timeout", L"3600s"};
+            std::string output;
+            p = Process::Run(args, projectDir, "", [&](const std::string& line) {
+                output += line;
+                output += '\n';
+            }, cancel, {}, 3660);
+            try
+            {
+                const json result = json::parse(output);
+                const std::string status = result.value("status", "");
+                text = result.value("response", std::string());
+                if (status != "SUCCESS")
+                    error = result.value("error", std::string("Antigravity n'a pas terminé le travail."));
+                else if (!text.empty())
+                    onProgress(text.substr(0, 300));
+            }
+            catch (...)
+            {
+                if (p.exitCode != 0)
+                    error = Shorten(p.stderrText.empty() ? output : p.stderrText);
+            }
+        }
+        else
+        {
         // Shell denied except allowed prefixes; file edits approved by auto_edit.
         std::string toml = "[[rule]]\ntoolName = \"run_shell_command\"\ndecision = \"deny\"\npriority = 500\n";
         for (const std::string& command : allowed)
@@ -901,6 +964,7 @@ TurnResult RunCodeWork(const std::string& aiId, const std::string& model, const 
                 error = ev.value("message", line);
         }, cancel, kGeminiEnv, 3600);
         fs::remove(policy, ec);
+        }
     }
     else
     {

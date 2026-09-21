@@ -1,6 +1,8 @@
 build/
 .vs/
 out/
+_CPack_Packages/
+Agents-Chat-*-win64.zip
 CMakeUserPresets.json
 *.user
 *.suo

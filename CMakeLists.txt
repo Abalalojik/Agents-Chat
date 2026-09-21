@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
 project(AgentChats LANGUAGES CXX)
 
+# Produce a genuinely portable Windows executable: the MSVC runtime is linked
+# statically, while DirectX/WinHTTP/Crypto remain normal Windows system DLLs.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -76,3 +80,12 @@ target_compile_options(AgentChatsTests PRIVATE /utf-8 /W4 /permissive-)
 
 enable_testing()
 add_test(NAME AgentChatsSafety COMMAND AgentChatsTests)
+
+install(TARGETS AgentChats RUNTIME DESTINATION .)
+install(FILES README.md LICENSE CAHIER-DES-CHARGES.md PORTABILITY.md DESTINATION documentation)
+
+set(CPACK_PACKAGE_NAME "Agents-Chat")
+set(CPACK_PACKAGE_VERSION "0.1.0")
+set(CPACK_GENERATOR "ZIP")
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+include(CPack)

@@ -65,7 +65,7 @@ private:
     void RequestSkill(const InboxItem& item);
     void PostSystem(const std::string& subserverId, const std::string& channelId, const std::string& text,
                     const std::string& sender = "system", const std::string& kind = "", const std::string& ref = "");
-    void RefreshAvailability();
+    void RefreshAvailability(const std::string& aiId = {});
     void ApplyAvailability();
     std::vector<std::string> SalonMembers(const Channel& channel, bool forDefaultSpeakers) const;
 

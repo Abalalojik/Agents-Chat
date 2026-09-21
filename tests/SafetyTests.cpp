@@ -47,10 +47,13 @@ int main(int argc, char** argv)
         std::atomic<bool> cancel{false};
         struct Probe { const char* name; BackendKind kind; const char* model; const char* thinking; };
         const Probe probes[] = {{"claude", BackendKind::ClaudeCli, "claude-haiku-4-5", "auto"},
-                                {"chatgpt", BackendKind::CodexCli, "gpt-5.6-luna", "low"}};
+                                {"chatgpt", BackendKind::CodexCli, "gpt-5.6-luna", "low"},
+                                {"gemini", BackendKind::GeminiCli, "gemini-3.8-flash-low", "low"}};
         int failures = 0;
         for (const Probe& probe : probes)
         {
+            if (argc > 2 && std::string(argv[2]) != probe.name)
+                continue;
             TurnRequest request;
             request.kind = probe.kind;
             request.model = probe.model;
@@ -65,6 +68,37 @@ int main(int argc, char** argv)
         }
         fs::remove_all(work, diagnosticEc);
         return failures == 0 ? 0 : 1;
+    }
+    if (argc > 2 && std::string(argv[1]) == "--code-smoke")
+    {
+        const std::string ai = argv[2];
+        const fs::path project = argc > 3 ? fs::path(Platform::Widen(argv[3])) : Platform::ProjectRoot();
+        const fs::path marker = project / ("agentchats-smoke-" + ai + ".txt");
+        std::error_code smokeEc;
+        fs::remove(marker, smokeEc);
+        const std::string expected = "AGENTS_CHAT_CODE_BRIDGE_OK_" + ai;
+        std::string model, thinking = "low";
+        if (ai == "claude") { model = "claude-haiku-4-5"; thinking = "auto"; }
+        else if (ai == "chatgpt") model = "gpt-5.6-luna";
+        else if (ai == "gemini") model = "gemini-3.8-flash-low";
+        else return 2;
+        std::atomic<bool> cancel{false};
+        const std::string instruction = "Crée uniquement le fichier agentchats-smoke-" + ai +
+            ".txt à la racine du projet, contenant exactement cette ligne : " + expected +
+            "\nN'exécute aucune commande et ne modifie rien d'autre.";
+        const TurnResult result = RunCodeWork(ai, model, thinking, instruction, project.wstring(), "",
+            [](const std::string& line) { std::printf("progress: %s\n", line.c_str()); }, cancel);
+        std::string actual;
+        if (fs::exists(marker, smokeEc))
+        {
+            std::ifstream in(marker, std::ios::binary);
+            actual.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        const bool valid = result.ok && actual.find(expected) != std::string::npos;
+        std::printf("%s code: ok=%s marker=%s summary=%s error=%s\n", ai.c_str(), result.ok ? "true" : "false",
+                    valid ? "valid" : "invalid", result.text.c_str(), result.error.c_str());
+        fs::remove(marker, smokeEc);
+        return valid ? 0 : 1;
     }
     CHECK(!Platform::ProjectRoot().empty());
     // A visible but exhausted/disconnected agent must never receive work.

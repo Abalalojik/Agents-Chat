@@ -284,55 +284,70 @@ App::~App()
         m_availThread.join();
 }
 
-void App::RefreshAvailability()
+void App::RefreshAvailability(const std::string& aiId)
 {
     if (m_availRunning)
         return;
     if (m_availThread.joinable())
         m_availThread.join();
     m_availRunning = true;
-    m_availThread = std::thread([this] {
-        Availability a;
+    Availability current;
+    {
+        std::lock_guard<std::mutex> lock(m_availMutex);
+        current = m_avail;
+    }
+    const std::string geminiModel = m_settings.Choice("gemini", ModelLevel::Normal).model;
+    m_availThread = std::thread([this, aiId, current, geminiModel] {
+        Availability a = aiId.empty() ? Availability{} : current;
         const AgentInstall c = FindClaude(), x = FindCodex(), g = FindGemini();
-        a.claudePath = c.description;
-        a.codexPath = x.description;
-        a.geminiPath = g.description;
-        if (c.found)
+        if (aiId.empty() || aiId == "claude")
         {
-            const LoginStatus s = CheckLogin("claude");
-            a.claude = s.loggedIn;
-            a.claudeDetail = s.detail;
-            a.claudePresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
-                                                               : PresenceState::Unknown)
-                                             : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
-                                s.detail, s.resetsAt};
+            a.claudePath = c.description;
+            if (c.found)
+            {
+                const LoginStatus s = CheckLogin("claude");
+                a.claude = s.loggedIn;
+                a.claudeDetail = s.detail;
+                a.claudePresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
+                                                                   : PresenceState::Unknown)
+                                                 : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
+                                    s.detail, s.resetsAt};
+            }
+            else
+                a.claudeDetail = "non installé";
         }
-        else
-            a.claudeDetail = "non installé";
-        if (x.found)
+        if (aiId.empty() || aiId == "chatgpt")
         {
-            const LoginStatus s = CheckLogin("chatgpt");
-            a.codex = s.loggedIn;
-            a.codexDetail = s.detail;
-            a.codexPresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
-                                                              : PresenceState::Unknown)
-                                            : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
-                               s.detail, s.resetsAt};
+            a.codexPath = x.description;
+            if (x.found)
+            {
+                const LoginStatus s = CheckLogin("chatgpt");
+                a.codex = s.loggedIn;
+                a.codexDetail = s.detail;
+                a.codexPresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
+                                                                  : PresenceState::Unknown)
+                                                : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
+                                   s.detail, s.resetsAt};
+            }
+            else
+                a.codexDetail = "non installé";
         }
-        else
-            a.codexDetail = "non installé";
-        if (g.found)
+        if (aiId.empty() || aiId == "gemini")
         {
-            const LoginStatus s = CheckLogin("gemini");
-            a.gemini = s.loggedIn;
-            a.geminiDetail = s.detail;
-            a.geminiPresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
-                                                               : PresenceState::Unknown)
-                                             : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
-                                s.detail, s.resetsAt};
+            a.geminiPath = g.description;
+            if (g.found)
+            {
+                const LoginStatus s = CheckLogin("gemini");
+                a.gemini = s.loggedIn;
+                a.geminiDetail = (geminiModel.empty() ? std::string("modèle automatique") : geminiModel) + " · " + s.detail;
+                a.geminiPresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
+                                                                   : PresenceState::Unknown)
+                                                 : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
+                                    a.geminiDetail, s.resetsAt};
+            }
+            else
+                a.geminiDetail = "non installé";
         }
-        else
-            a.geminiDetail = "non installé";
         {
             std::lock_guard<std::mutex> lock(m_availMutex);
             m_avail = a;
@@ -359,15 +374,13 @@ void App::ApplyAvailability()
     m_settings.SetDetectedPresence("chatgpt", "code", a.codexPresence);
     const bool geminiApi = m_settings.HasApiKey(Provider::GeminiApi);
     m_settings.SetAvailable("gemini", "chat", a.gemini || geminiApi);
-    // Antigravity is the research specialist. Code execution belongs to Codex;
-    // keeping this tier disabled also prevents legacy Gemini CLI arguments from
-    // being sent accidentally to agy.exe.
-    m_settings.SetAvailable("gemini", "code", false);
+    m_settings.SetAvailable("gemini", "code", a.gemini);
     m_settings.SetAvailable("gemini", "cli", a.gemini);
     m_settings.SetDetectedPresence("gemini", "chat", a.gemini ? a.geminiPresence
                                                                : (geminiApi ? Presence{PresenceState::Limited, "limité · crédits API Google", ""}
                                                                             : Presence{}));
     m_settings.SetDetectedPresence("gemini", "cli", a.geminiPresence);
+    m_settings.SetDetectedPresence("gemini", "code", a.geminiPresence);
     m_settings.SetDetectedPresence("gemini", "api", geminiApi ? Presence{PresenceState::Limited, "limité · crédits API Google", ""}
                                                                : Presence{});
     auto apiCredits = [&](const char* ai, bool configured, const char* provider) {
@@ -2712,7 +2725,7 @@ void App::DrawConnectionsTab()
         a = m_avail;
     }
     ImGui::TextWrapped("Tes forfaits passent par les agents officiels, installés sur ta machine. « Se connecter » ouvre "
-                       "la procédure officielle dans une console : suis-la dans ton navigateur, puis clique sur « Vérifier ». "
+                       "la procédure officielle dans une console : suis-la dans ton navigateur, puis vérifie cette IA. "
                        "L'application ne voit jamais tes identifiants.");
     ImGui::Spacing();
     struct Row
@@ -2740,8 +2753,10 @@ void App::DrawConnectionsTab()
                 m_store.SetError(error);
         }
         ImGui::SameLine();
+        ImGui::BeginDisabled(m_availRunning);
         if (ImGui::Button("Vérifier"))
-            RefreshAvailability();
+            RefreshAvailability(row.ai);
+        ImGui::EndDisabled();
         ImGui::Spacing();
         ImGui::PopID();
     }

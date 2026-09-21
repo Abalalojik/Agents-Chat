@@ -26,7 +26,8 @@ const std::vector<AiCatalogEntry>& ModelCatalog()
          {{{"gpt-5.6-luna", "low"}, {"gpt-5.6-sol", "medium"}, {"gpt-6-astra", "high"}}}},
 
         {"gemini", "Gemini", "Antigravity CLI (recherche) ou API AI Studio",
-         {"gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high", "gemini-3.1-pro-low", "gemini-3.1-pro-high"},
+         {"gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high", "gemini-3.1-pro-low", "gemini-3.1-pro-high",
+          "gpt-oss-120b-medium", "claude-sonnet-4-6", "claude-opus-4-6-thinking"},
          {"auto", "low", "medium", "high"},
          {{{"gemini-3.8-flash-low", "low"}, {"gemini-3.8-flash-medium", "medium"}, {"gemini-3.1-pro-high", "high"}}}},
 
