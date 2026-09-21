@@ -133,8 +133,11 @@ namespace
         }
         wchar_t shortExe[32768];
         const DWORD shortCount = GetShortPathNameW(executable.c_str(), shortExe, static_cast<DWORD>(std::size(shortExe)));
-        const std::string command = shortCount && shortCount < std::size(shortExe)
-            ? Platform::Narrow(std::wstring(shortExe, shortCount)) + " --capture-antigravity-status"
+        const std::wstring shortPath = shortCount && shortCount < std::size(shortExe)
+            ? std::wstring(shortExe, shortCount) : std::wstring();
+        const bool shellSafeShortPath = !shortPath.empty() && shortPath.find_first_of(L" \t\"") == std::wstring::npos;
+        const std::string command = shellSafeShortPath
+            ? Platform::Narrow(shortPath) + " --capture-antigravity-status"
             : "powershell.exe -NoProfile -Command \"& '" + Platform::Narrow(executable) + "' --capture-antigravity-status\"";
         value["statusLine"] = {
             {"type", "command"},
