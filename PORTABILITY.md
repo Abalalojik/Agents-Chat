@@ -2,9 +2,24 @@
 
 ## Verdict
 
-Les données et la logique métier sont importables, mais l'application ne compile pas encore sous Linux.
-Le `CMakeLists.txt` bloque volontairement les plateformes non-Windows et lie l'exécutable à Win32,
-DirectX 11, WinHTTP, DPAPI et au shell Windows.
+Port **écrit, pas encore vérifié** (21 septembre 2026). Chaque couche Windows a désormais son côté Linux,
+derrière `#ifdef _WIN32`, et le build Windows reste identique (zéro avertissement, tests verts). Aucune
+compilation Linux réelle n'a encore eu lieu : tant que `linux/check.ps1` n'est pas passé, Linux n'est pas
+déclaré disponible (principe 6 du cahier des charges).
+
+Vérifier depuis Windows, avec Docker Desktop lancé (dépôt monté en lecture seule) :
+
+```powershell
+powershell -File linux\check.ps1        # chaque fichier compilé seul : tableau OK / ÉCHEC
+powershell -File linux\check.ps1 -Full  # vrai build CMake + Ninja, puis les tests
+```
+
+Choix faits pour Linux : libcurl (HTTP), trousseau Secret Service via libsecret (secrets), OpenSSL
+(signatures, mêmes formats de clé et de signature que BCrypt), `fork`/`execve` avec groupe de processus
+(annulation et délai tuent tout l'arbre ; **plafond mémoire pas encore appliqué**, un cgroup est prévu),
+`gio trash` (corbeille), `xdg-open` (liens), `zenity` (choix de dossier), terminal du bureau (connexion
+des CLI), timer systemd utilisateur (synchronisation), SDL2 + OpenGL 3 (fenêtre). La mise à jour se
+remplace en place et démarre au lancement suivant.
 
 ## Réutilisable sans changement de format
 
