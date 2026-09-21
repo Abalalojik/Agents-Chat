@@ -1,0 +1,462 @@
+#include "Tools.h"
+#include "Platform.h"
+#include "Secrets.h"
+
+#include <algorithm>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+
+using nlohmann::json;
+namespace fs = std::filesystem;
+
+namespace Tools
+{
+    namespace
+    {
+        std::string Lower(std::string s)
+        {
+            // ASCII lower-case is enough for matching; accents compare as-is.
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        }
+
+        std::string ReadFileUtf8(const fs::path& p, size_t maxBytes)
+        {
+            std::ifstream in(p, std::ios::binary);
+            std::string s;
+            s.resize(maxBytes);
+            in.read(s.data(), static_cast<std::streamsize>(maxBytes));
+            s.resize(static_cast<size_t>(in.gcount()));
+            return s;
+        }
+
+        bool IsTextNote(const fs::path& p)
+        {
+            const std::wstring ext = p.extension().wstring();
+            return _wcsicmp(ext.c_str(), L".md") == 0 || _wcsicmp(ext.c_str(), L".txt") == 0;
+        }
+
+        bool Hidden(const fs::path& relative)
+        {
+            for (const fs::path& part : relative)
+            {
+                const std::wstring s = part.wstring();
+                if (!s.empty() && s[0] == L'.') // .obsidian, .git, .trash...
+                    return true;
+            }
+            return false;
+        }
+
+        const fs::path* RootFor(const json& args, const Sources& src)
+        {
+            const std::string source = args.value("source", "vault");
+            if (source == "lore")
+                return src.lore.empty() ? nullptr : &src.lore;
+            return src.vault.empty() ? nullptr : &src.vault;
+        }
+
+        std::string Rel(const fs::path& root, const fs::path& p)
+        {
+            std::error_code ec;
+            return Platform::Narrow(fs::relative(p, root, ec).generic_wstring());
+        }
+    }
+
+    std::vector<Call> Extract(const std::string& reply, std::string& textWithoutCalls)
+    {
+        std::vector<Call> calls;
+        textWithoutCalls.clear();
+        size_t pos = 0;
+        for (;;)
+        {
+            const size_t open = reply.find("```outil", pos);
+            if (open == std::string::npos)
+            {
+                textWithoutCalls += reply.substr(pos);
+                break;
+            }
+            const size_t bodyStart = reply.find('\n', open);
+            const size_t close = bodyStart == std::string::npos ? std::string::npos : reply.find("```", bodyStart);
+            if (close == std::string::npos)
+            {
+                textWithoutCalls += reply.substr(pos);
+                break;
+            }
+            textWithoutCalls += reply.substr(pos, open - pos);
+            const std::string body = reply.substr(bodyStart + 1, close - bodyStart - 1);
+            try
+            {
+                const json j = json::parse(body);
+                const auto add = [&](const json& one) {
+                    if (one.is_object() && one.contains("nom") && one["nom"].is_string())
+                        calls.push_back({one["nom"].get<std::string>(), one});
+                };
+                if (j.is_array())
+                    for (const json& one : j)
+                        add(one);
+                else
+                    add(j);
+            }
+            catch (...)
+            {
+                calls.push_back({"__invalide", json{{"texte", body}}});
+            }
+            pos = close + 3;
+        }
+        // Trim what is left around removed blocks.
+        const auto first = textWithoutCalls.find_first_not_of(" \t\r\n");
+        const auto last = textWithoutCalls.find_last_not_of(" \t\r\n");
+        textWithoutCalls = first == std::string::npos ? std::string() : textWithoutCalls.substr(first, last - first + 1);
+        return calls;
+    }
+
+    bool IsReadTool(const std::string& name)
+    {
+        return name == "lire_note" || name == "chercher" || name == "lister" || name == "chercher_historique" ||
+               name == "chercher_mails" || name == "lire_agenda" || name == "solde_comptes" ||
+               name == "chercher_transactions" || name == "__invalide";
+    }
+
+    std::string Guide(ChannelType type, bool hasVault, bool hasLore, bool hasCode)
+    {
+        std::string g =
+            "OUTILS. Tu n'as pas d'accès direct aux fichiers ni au terminal : pour agir, écris un bloc\n"
+            "```outil\n{\"nom\": \"...\", ...}\n```\n"
+            "(plusieurs blocs possibles). Les outils de lecture te renvoient leur résultat avant ta réponse finale ; "
+            "les autres sont transmis à l'utilisatrice, qui les accepte ou non.\n"
+            "- chercher_historique {\"requete\": \"mots\", \"portee\": \"salon\"|\"sous-serveur\"} : retrouver ce qui a été dit.\n"
+            "- chercher_mails {\"requete\": \"mots\", \"non_lus\": false} : consulter le cache local des comptes mail connectés.\n"
+            "- lire_agenda {\"requete\": \"\"} : consulter les événements synchronisés des agendas connectés.\n"
+            "- solde_comptes {} : consulter les soldes bancaires synchronisés en lecture seule.\n"
+            "- chercher_transactions {\"requete\": \"mots\", \"depenses_seulement\": false} : rechercher les opérations bancaires synchronisées.\n"
+            "- retenir {\"niveau\": \"toi\"|\"sous-serveur\"|\"salon\", \"texte\": \"un fait\"} : mémoire commune. "
+            "« toi » = ce qui concerne l'utilisatrice partout. Cette mémoire est partagée en temps réel par toute l'équipe : "
+            "ne retiens jamais une information déjà présente dans MÉMOIRE COMMUNE ou qu'une autre IA vient de retenir.\n"
+            "- te_demander {\"question\": \"...\"} : poser une question qui attend sa décision.\n"
+            "- tache {\"action\": \"creer\"|\"statut\", \"titre\": \"...\", \"assigne\": \"claude\", \"statut\": \"a_faire\"|\"en_cours\"|\"fait\"|\"bloque\"} : tableau des tâches du salon.\n"
+            "- demander_skill {\"nom\": \"...\", \"besoin\": \"...\"} : demander un nouvel outil (il sera fabriqué dans l'Atelier si elle accepte).\n";
+        if (type != ChannelType::Code && (hasVault || hasLore))
+        {
+            g += "- lire_note {\"source\": \"vault\"|\"lore\", \"chemin\": \"dossier/Note.md\"}\n"
+                 "- chercher {\"source\": \"vault\"|\"lore\", \"requete\": \"mots\"} : trouver les notes qui en parlent.\n"
+                 "- lister {\"source\": \"vault\"|\"lore\", \"dossier\": \"\"} : voir les notes d'un dossier.\n";
+        }
+        if (type == ChannelType::Analyse && hasVault)
+            g += "- proposer_correction {\"source\": \"vault\", \"chemin\": \"...\", \"ancien\": \"texte exact\", \"nouveau\": \"texte corrigé\"} : "
+                 "une correction ciblée, montrée en avant/après.\n";
+        if (type == ChannelType::ConsolidationLore && hasLore)
+            g += "- proposer_correction {\"source\": \"lore\", \"chemin\": \"...\", \"ancien\": \"texte exact\", \"nouveau\": \"texte\"} : "
+                 "modifier le lore (\"ancien\": \"\" pour créer une note).\n";
+        if (type == ChannelType::Code && hasCode)
+            g += "- travail_code {\"instructions\": \"consignes précises et complètes\"} : confier un travail à ton agent de code "
+                 "(ton jumeau), dans le dossier du projet. Il ne démarre qu'avec l'accord de l'utilisatrice.\n";
+        return g;
+    }
+
+    fs::path Confine(const fs::path& root, const std::string& relative)
+    {
+        if (root.empty() || relative.find('\0') != std::string::npos)
+            return {};
+        const fs::path rel = fs::path(Platform::Widen(relative)).lexically_normal();
+        if (rel.is_absolute() || rel.has_root_name() || rel.has_root_directory())
+            return {};
+        for (const fs::path& part : rel)
+            if (part == L"..")
+                return {};
+        if (Hidden(rel))
+            return {};
+        std::error_code ec;
+        const fs::path base = fs::weakly_canonical(root, ec);
+        const fs::path full = fs::weakly_canonical(base / rel, ec);
+        std::wstring b = base.wstring();
+        const std::wstring f = full.wstring();
+        // Compare with a trailing separator: "C:\Vault2" must not pass as inside "C:\Vault".
+        if (!b.empty() && b.back() != L'\\')
+            b.push_back(L'\\');
+        if (f.size() < b.size() || _wcsnicmp(f.c_str(), b.c_str(), b.size()) != 0)
+            return {};
+        return full;
+    }
+
+    namespace
+    {
+        bool IsUnder(const fs::path& root, const fs::path& file)
+        {
+            if (root.empty())
+                return false;
+            std::error_code ec;
+            std::wstring r = fs::weakly_canonical(root, ec).wstring();
+            const std::wstring f = fs::weakly_canonical(file, ec).wstring();
+            if (!r.empty() && r.back() != L'\\')
+                r.push_back(L'\\');
+            return f.size() >= r.size() && _wcsnicmp(f.c_str(), r.c_str(), r.size()) == 0;
+        }
+
+        size_t Depth(const fs::path& p)
+        {
+            std::error_code ec;
+            size_t n = 0;
+            for (const auto& part : fs::weakly_canonical(p, ec))
+                (void)part, ++n;
+            return n;
+        }
+    }
+
+    std::string ZoneOf(const fs::path& file, const fs::path& vaultRoot, const fs::path& loreRoot)
+    {
+        const bool inVault = IsUnder(vaultRoot, file);
+        const bool inLore = IsUnder(loreRoot, file);
+        if (inVault && inLore)
+            return Depth(loreRoot) >= Depth(vaultRoot) ? "lore" : "vault";
+        return inLore ? "lore" : inVault ? "vault" : "";
+    }
+
+    std::string RunRead(const Call& call, const Sources& src, ChannelType type)
+    {
+        const json& a = call.args;
+        if (call.name == "__invalide")
+            return "Bloc outil illisible (JSON invalide) : " + a.value("texte", std::string());
+
+        if (call.name == "chercher_historique")
+        {
+            const std::string query = Lower(a.value("requete", ""));
+            if (query.empty())
+                return "Requête vide.";
+            const bool wide = a.value("portee", "salon") == "sous-serveur";
+            std::vector<std::string> channels = wide ? src.channelIds : std::vector<std::string>{src.channelId};
+            std::string out;
+            int hits = 0;
+            for (const std::string& cid : channels)
+            {
+                const fs::path t = src.dataRoot / "subservers" / src.subserverId / "channels" / cid / "transcript.jsonl";
+                std::ifstream in(t, std::ios::binary);
+                std::string line;
+                while (std::getline(in, line) && hits < 25)
+                {
+                    try
+                    {
+                        const json r = json::parse(line);
+                        if (r.value("type", "") != "message")
+                            continue;
+                        const json& d = r["data"];
+                        const std::string content = d.value("content", "");
+                        if (Lower(content).find(query) == std::string::npos)
+                            continue;
+                        out += "[" + d.value("timestamp", "") + "] " + d.value("sender", "") + " : " +
+                               (content.size() > 400 ? content.substr(0, 400) + "…" : content) + "\n";
+                        ++hits;
+                    }
+                    catch (...)
+                    {
+                    }
+                }
+            }
+            return hits ? "Messages trouvés (" + std::to_string(hits) + ") :\n" + out : "Aucun message ne contient « " + a.value("requete", "") + " ».";
+        }
+
+        if (call.name == "chercher_mails" || call.name == "lire_agenda")
+        {
+            const fs::path cacheFile = src.dataRoot / "cloud" / "cache.json";
+            try
+            {
+                std::ifstream in(cacheFile, std::ios::binary);
+                if (!in) return "Aucun compte mail/agenda n'est encore synchronisé.";
+                json cache = json::parse(in);
+                if (cache.contains("protected"))
+                {
+                    const std::string plain = Secrets::Unprotect(cache.value("protected", ""));
+                    if (plain.empty()) return "Le cache mail/agenda ne peut pas être déchiffré pour ce compte Windows.";
+                    cache = json::parse(plain);
+                }
+                const std::string query = Lower(a.value("requete", ""));
+                std::string out = "Dernière synchronisation : " + cache.value("syncedAt", "inconnue") + "\n";
+                int hits = 0;
+                if (call.name == "chercher_mails")
+                {
+                    const bool unreadOnly = a.value("non_lus", false);
+                    for (const json& m : cache.value("messages", json::array()))
+                    {
+                        if (unreadOnly && m.value("isRead", false)) continue;
+                        const std::string subject = m.value("subject", "(sans objet)");
+                        const std::string preview = m.value("bodyPreview", "");
+                        std::string from;
+                        if (m.contains("from") && m["from"].contains("emailAddress"))
+                            from = m["from"]["emailAddress"].value("name", m["from"]["emailAddress"].value("address", ""));
+                        if (!query.empty() && Lower(subject + " " + preview + " " + from).find(query) == std::string::npos) continue;
+                        out += "[" + m.value("receivedDateTime", "") + "] " + (m.value("isRead", false) ? "" : "[NON LU] ") +
+                               from + " — " + subject + "\n" + preview.substr(0, 500) + "\n\n";
+                        if (++hits >= 30) break;
+                    }
+                }
+                else
+                {
+                    for (const json& e : cache.value("events", json::array()))
+                    {
+                        const std::string subject = e.value("subject", "(sans titre)");
+                        const std::string location = e.contains("location") ? e["location"].value("displayName", "") : "";
+                        if (!query.empty() && Lower(subject + " " + location).find(query) == std::string::npos) continue;
+                        const std::string start = e.contains("start") ? e["start"].value("dateTime", "") : "";
+                        const std::string end = e.contains("end") ? e["end"].value("dateTime", "") : "";
+                        out += start + " → " + end + " — " + subject + (location.empty() ? "" : " @ " + location) + "\n";
+                        if (++hits >= 80) break;
+                    }
+                }
+                return hits ? out : "Aucun élément correspondant dans le cache synchronisé.";
+            }
+            catch (const std::exception& e) { return std::string("Cache mail/agenda illisible : ") + e.what(); }
+        }
+
+        if (call.name == "solde_comptes" || call.name == "chercher_transactions")
+        {
+            try
+            {
+                std::ifstream in(src.dataRoot / "cloud" / "finance.json", std::ios::binary);
+                if (!in) return "Aucun compte bancaire n'est encore synchronisé.";
+                json cache = json::parse(in);
+                if (cache.contains("protected"))
+                {
+                    const std::string plain = Secrets::Unprotect(cache.value("protected", ""));
+                    if (plain.empty()) return "Le cache bancaire ne peut pas être déchiffré pour ce compte Windows.";
+                    cache = json::parse(plain);
+                }
+                std::string out = "Dernière synchronisation : " + cache.value("syncedAt", "inconnue") + "\n";
+                int hits = 0;
+                const std::string query = Lower(a.value("requete", ""));
+                const bool expensesOnly = a.value("depenses_seulement", false);
+                for (const json& account : cache.value("accounts", json::array()))
+                {
+                    const std::string name = account.value("name", "Compte");
+                    const std::string currency = account.value("currency", "EUR");
+                    if (call.name == "solde_comptes")
+                    {
+                        out += name + " : " + account.value("balance", "?") + " " + currency;
+                        if (account.contains("available-balance"))
+                            out += " (disponible : " + account.value("available-balance", "?") + " " + currency + ")";
+                        out += "\n";
+                        ++hits;
+                        continue;
+                    }
+                    for (const json& transaction : account.value("transactions", json::array()))
+                    {
+                        const std::string amount = transaction.value("amount", "0");
+                        double numeric = 0.0;
+                        try { numeric = std::stod(amount); } catch (...) {}
+                        if (expensesOnly && numeric >= 0.0) continue;
+                        const std::string description = transaction.value("description", "");
+                        const std::string payee = transaction.value("payee", "");
+                        const std::string memo = transaction.value("memo", "");
+                        if (!query.empty() && Lower(description + " " + payee + " " + memo + " " + name).find(query) == std::string::npos)
+                            continue;
+                        std::string date;
+                        const std::time_t epoch = static_cast<std::time_t>(transaction.value("posted", 0LL));
+                        if (epoch > 0)
+                        {
+                            std::tm local{}; localtime_s(&local, &epoch);
+                            std::ostringstream formatted; formatted << std::put_time(&local, "%Y-%m-%d"); date = formatted.str();
+                        }
+                        out += "[" + date + "] " + name + " — " + amount + " " + currency + " — " +
+                               (!payee.empty() ? payee : description);
+                        if (transaction.value("pending", false)) out += " [EN ATTENTE]";
+                        if (!memo.empty()) out += " — " + memo;
+                        out += "\n";
+                        if (++hits >= 100) break;
+                    }
+                    if (hits >= 100) break;
+                }
+                return hits ? out : "Aucun élément correspondant dans le cache bancaire synchronisé.";
+            }
+            catch (const std::exception& e) { return std::string("Cache bancaire illisible : ") + e.what(); }
+        }
+
+        if (type == ChannelType::Code)
+            return "Pas d'accès au vault ni au lore dans un salon Code.";
+        const fs::path* root = RootFor(a, src);
+        if (!root)
+            return "Ce sous-serveur n'a pas de " + a.value("source", std::string("vault")) + ".";
+
+        if (call.name == "lire_note")
+        {
+            const fs::path p = Confine(*root, a.value("chemin", ""));
+            std::error_code ec;
+            if (p.empty() || !fs::is_regular_file(p, ec) || !IsTextNote(p))
+                return "Note introuvable ou hors du périmètre : " + a.value("chemin", "");
+            std::string text = ReadFileUtf8(p, 60000);
+            if (text.size() == 60000)
+                text += "\n[…note tronquée à 60 000 caractères]";
+            return "Contenu de « " + Rel(*root, p) + " » :\n" + text;
+        }
+
+        if (call.name == "lister")
+        {
+            const fs::path dir = a.value("dossier", "").empty() ? *root : Confine(*root, a.value("dossier", ""));
+            std::error_code ec;
+            if (dir.empty() || !fs::is_directory(dir, ec))
+                return "Dossier introuvable : " + a.value("dossier", "");
+            std::string out;
+            int n = 0;
+            for (const auto& e : fs::directory_iterator(dir, ec))
+            {
+                const fs::path rel = fs::relative(e.path(), *root, ec);
+                if (Hidden(rel) || (!e.is_directory() && !IsTextNote(e.path())))
+                    continue;
+                out += (e.is_directory() ? "[dossier] " : "") + Platform::Narrow(rel.generic_wstring()) + "\n";
+                if (++n >= 200)
+                {
+                    out += "[…liste tronquée]\n";
+                    break;
+                }
+            }
+            return out.empty() ? "Dossier vide." : out;
+        }
+
+        if (call.name == "chercher")
+        {
+            const std::string query = Lower(a.value("requete", ""));
+            if (query.empty())
+                return "Requête vide.";
+            std::string out;
+            int hits = 0, files = 0;
+            std::error_code ec;
+            for (auto it = fs::recursive_directory_iterator(*root, fs::directory_options::skip_permission_denied, ec);
+                 it != fs::recursive_directory_iterator() && hits < 30 && files < 20000; it.increment(ec))
+            {
+                const fs::path rel = fs::relative(it->path(), *root, ec);
+                if (Hidden(rel))
+                {
+                    if (it->is_directory())
+                        it.disable_recursion_pending();
+                    continue;
+                }
+                if (!it->is_regular_file() || !IsTextNote(it->path()))
+                    continue;
+                ++files;
+                const std::string text = ReadFileUtf8(it->path(), 400000);
+                const std::string lower = Lower(text);
+                const std::string name = Platform::Narrow(rel.generic_wstring());
+                if (Lower(name).find(query) != std::string::npos)
+                {
+                    out += name + " (titre)\n";
+                    ++hits;
+                }
+                size_t at = lower.find(query);
+                int perFile = 0;
+                while (at != std::string::npos && perFile < 3 && hits < 30)
+                {
+                    const size_t lineStart = text.rfind('\n', at) == std::string::npos ? 0 : text.rfind('\n', at) + 1;
+                    size_t lineEnd = text.find('\n', at);
+                    if (lineEnd == std::string::npos)
+                        lineEnd = text.size();
+                    std::string line = text.substr(lineStart, std::min<size_t>(lineEnd - lineStart, 300));
+                    out += name + " : " + line + "\n";
+                    ++hits;
+                    ++perFile;
+                    at = lower.find(query, lineEnd);
+                }
+            }
+            return hits ? out : "Rien trouvé pour « " + a.value("requete", "") + " ».";
+        }
+
+        return "Outil inconnu : " + call.name;
+    }
+}
