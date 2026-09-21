@@ -15,6 +15,8 @@ public:
     void Check();
     void Download();
     void PrepareSource();
+    // Fast-forwards the clone from upstream, only when it is clean and on main (never loses work).
+    void RefreshSource();
     // Builds AgentChats + AgentChatsTests from a source tree (default: the local clone) and
     // runs the tests; only a build whose tests pass is staged for installation.
     bool BuildLocal(const std::filesystem::path& source = {}); // false: not started (busy, no CMakeLists.txt)

@@ -417,10 +417,8 @@ bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
     {
         const Subserver previous = *existing;
         bool changed = false;
-        std::error_code sourceEc;
-        const bool existingSourceMissing = existing->codePath.empty() ||
-                                           !fs::is_directory(Platform::Widen(existing->codePath), sourceEc);
-        if (!codePath.empty() && existingSourceMissing && existing->codePath != codePath)
+        // Always the app's own clone: AIs of this sous-serveur must never work in a developer checkout.
+        if (!codePath.empty() && existing->codePath != codePath)
         {
             existing->codePath = codePath;
             existing->mainPath = codePath;

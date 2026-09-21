@@ -285,9 +285,7 @@ App::App(Store& store, Settings& settings, void* hwnd)
     ApplyAvailability();
     RefreshAvailability();
     if (m_updater.SourceReady())
-    {
-        if (m_settings.AutoUpdate()) { m_updater.Download(); m_autoUpdateStarted = true; }
-    }
+        m_updater.RefreshSource(); // any auto-update download follows in Frame once this is done
     else
         m_updater.PrepareSource();
 }

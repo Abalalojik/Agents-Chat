@@ -221,8 +221,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 
     Store store(dataRoot);
     store.Load();
-    const std::filesystem::path projectRoot = Platform::ProjectRoot();
-    store.EnsureSelfImprovementSubserver(Platform::Narrow(projectRoot.wstring()));
+    // The self-improvement sous-serveur is attached to the app's own clone by App, once it exists:
+    // never to the checkout this executable may have been built from.
     Settings settings(dataRoot);
     settings.Load();
     App app(store, settings, hwnd);

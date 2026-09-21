@@ -81,6 +81,33 @@ void Updater::PrepareSource()
     });
 }
 
+void Updater::RefreshSource()
+{
+    if (!SourceReady() || m_busy.exchange(true)) return;
+    if (m_thread.joinable()) m_thread.join();
+    m_thread = std::thread([this] {
+        auto done = [&](std::string text) { std::lock_guard<std::mutex> lock(m_mutex); m_status = std::move(text); m_busy = false; };
+        const std::wstring git = Process::FindOnPath(L"git.exe");
+        if (git.empty()) { done("Git n'est pas installé."); return; }
+        std::atomic<bool> cancel{false};
+        std::string out;
+        auto run = [&](std::vector<std::wstring> args, unsigned timeout) {
+            out.clear();
+            args.insert(args.begin(), git);
+            return Process::Run(args, m_source.wstring(), "", [&](const std::string& line) { out += line + "\n"; }, cancel,
+                                {L"GIT_TERMINAL_PROMPT=0"}, timeout);
+        };
+        if (run({L"status", L"--porcelain"}, 60).exitCode != 0 || !out.empty())
+        { done("Copie locale : des modifications sont en cours, elle n'est pas mise à jour."); return; }
+        if (run({L"rev-parse", L"--abbrev-ref", L"HEAD"}, 30).exitCode != 0 || out.rfind("main", 0) != 0)
+        { done("Copie locale : une branche de travail est en cours, elle n'est pas mise à jour."); return; }
+        const Process::Result fetched = run({L"fetch", L"upstream"}, 120);
+        if (fetched.exitCode != 0) { done("Copie locale : mise à jour impossible (" + fetched.stderrText.substr(0, 200) + ")."); return; }
+        const Process::Result merged = run({L"merge", L"--ff-only", L"upstream/main"}, 60);
+        done(merged.exitCode == 0 ? "Copie locale à jour avec GitHub." : "Copie locale : elle a divergé de GitHub, rien n'a été changé.");
+    });
+}
+
 bool Updater::BuildLocal(const fs::path& sourceOverride)
 {
     const fs::path source = sourceOverride.empty() ? m_source : sourceOverride;
