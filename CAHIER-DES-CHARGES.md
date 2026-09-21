@@ -55,7 +55,16 @@ Types de salons :
 - **Code** : coordination et délégation aux agents de code ;
 - **Bugs GitHub** : qualification, reproduction, tâche locale, issue GitHub, correction et non-régression.
 
-Le sous-serveur intégré « Amélioration d’Agents Chat » sert à faire évoluer Agents Chat lui-même.
+Le sous-serveur intégré « Amélioration d’Agents Chat » sert à faire évoluer Agents Chat lui-même. Dans son salon
+Code, les IA modifient le code (écritures et agents de code approuvés), puis l'outil `ameliorer` enchaîne, chaque
+étape passant par la boîte aux lettres :
+
+- `compiler_tester` : configure, compile `AgentChats` et `AgentChatsTests`, lance les tests ; le résultat (et la fin
+  du journal en cas d'échec) revient dans le salon et l'IA demandeuse reprend la main ;
+- `installer` : n'installe que la dernière version locale **dont les tests passent** ; la version remplacée est gardée
+  pour le retour arrière ;
+- `proposer_pr` : commit de toutes les modifications, branche `amelioration/<date>` (ou la branche de travail en
+  cours), push, puis pull request via `gh` ; une PR existante pour la branche est simplement mise à jour.
 
 ## 5. Conversations privées et todo
 

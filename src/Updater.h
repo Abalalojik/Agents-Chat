@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -14,7 +15,20 @@ public:
     void Check();
     void Download();
     void PrepareSource();
-    void BuildLocal();
+    // Builds AgentChats + AgentChatsTests from a source tree (default: the local clone) and
+    // runs the tests; only a build whose tests pass is staged for installation.
+    void BuildLocal(const std::filesystem::path& source = {});
+    struct BuildReport
+    {
+        bool ok = false;          // built, tests passed, staged
+        bool built = false;
+        bool testsPassed = false;
+        std::string summary;
+        std::string log;          // tail of the build and test output
+    };
+    // The result of the last BuildLocal, once (then empty).
+    std::optional<BuildReport> TakeReport();
+    bool LocalBuildReady() const;
     void PrepareContribution();
     bool Busy() const { return m_busy; }
     std::string Status() const;
@@ -37,6 +51,7 @@ private:
     std::atomic<bool> m_busy{false};
     std::string m_status, m_version, m_downloadUrl, m_hashUrl;
     bool m_ready = false;
+    std::optional<BuildReport> m_report;
 };
 
 inline constexpr const char* kAgentChatsVersion = AGENTCHATS_VERSION;

@@ -81,29 +81,77 @@ void Updater::PrepareSource()
     });
 }
 
-void Updater::BuildLocal()
+void Updater::BuildLocal(const fs::path& sourceOverride)
 {
-    if (!SourceReady() || m_busy.exchange(true)) return;
+    const fs::path source = sourceOverride.empty() ? m_source : sourceOverride;
+    std::error_code sourceEc;
+    if (!fs::is_regular_file(source / "CMakeLists.txt", sourceEc) || m_busy.exchange(true)) return;
     if (m_thread.joinable()) m_thread.join();
-    m_thread = std::thread([this] {
-        auto done = [&](std::string text) { std::lock_guard<std::mutex> lock(m_mutex); m_status = std::move(text); m_busy = false; };
+    m_thread = std::thread([this, source] {
+        BuildReport report;
+        std::string output;
+        auto collect = [&](const std::string& line) { output += line + "\n"; if (output.size() > 16000) output.erase(0, output.size() - 16000); };
+        auto finish = [&](std::string text) {
+            report.summary = text;
+            report.log = output.size() > 4000 ? output.substr(output.size() - 4000) : output;
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_status = std::move(text);
+            m_report = std::move(report);
+            m_busy = false;
+        };
         const std::wstring cmake = FindCMake();
-        if (cmake.empty()) { done("Compilation locale impossible : CMake n'est pas installé ou n'est pas dans PATH."); return; }
-        std::atomic<bool> cancel{false}; std::string output;
-        const fs::path build = m_source / "build-local";
-        auto collect = [&](const std::string& line) { output += line + "\n"; if (output.size() > 8000) output.erase(0, output.size() - 8000); };
-        Process::Result r = Process::Run({cmake, L"-S", m_source.wstring(), L"-B", build.wstring()}, m_source.wstring(), "", collect, cancel, {}, 600);
-        if (r.exitCode == 0)
-            r = Process::Run({cmake, L"--build", build.wstring(), L"--config", L"Release"}, m_source.wstring(), "", collect, cancel, {}, 1200);
+        if (cmake.empty()) { finish("Compilation locale impossible : CMake n'est pas installé ou n'est pas dans PATH."); return; }
+        { std::lock_guard<std::mutex> lock(m_mutex); m_status = "Compilation de la version locale…"; }
+        std::atomic<bool> cancel{false};
+        const fs::path build = source / "build-local";
+        Process::Result r = Process::Run({cmake, L"-S", source.wstring(), L"-B", build.wstring()}, source.wstring(), "", collect, cancel, {}, 600);
+        if (r.exitCode == 0 && r.started && !r.timedOut)
+            r = Process::Run({cmake, L"--build", build.wstring(), L"--config", L"Release", L"--target", L"AgentChats", L"AgentChatsTests"},
+                             source.wstring(), "", collect, cancel, {}, 1800);
+        if (!r.started || r.timedOut || r.exitCode != 0)
+        {
+            finish("Compilation locale échouée" + std::string(r.timedOut ? " (délai dépassé)." : ".") +
+                   (r.stderrText.empty() ? "" : " " + r.stderrText.substr(0, 600)));
+            return;
+        }
+        report.built = true;
+        // The tests of the modified code decide; a failing build is never staged.
+        { std::lock_guard<std::mutex> lock(m_mutex); m_status = "Tests de la version locale…"; }
+        output += "\n--- AgentChatsTests ---\n";
+        const fs::path tests = build / "Release" / "AgentChatsTests.exe";
+        r = Process::Run({tests.wstring()}, build.wstring(), "", collect, cancel, {}, 600);
+        report.testsPassed = r.started && !r.timedOut && r.exitCode == 0;
+        if (!report.testsPassed)
+        {
+            finish("Version locale compilée, mais les tests échouent" + std::string(r.timedOut ? " (délai dépassé)" : "") +
+                   " : elle ne sera pas installée.");
+            return;
+        }
         const fs::path built = build / "Release" / "AgentChats.exe";
         std::error_code ec; fs::create_directories(m_root, ec);
-        if (r.exitCode == 0 && fs::copy_file(built, m_pending, fs::copy_options::overwrite_existing, ec))
+        if (!fs::copy_file(built, m_pending, fs::copy_options::overwrite_existing, ec))
         {
-            { std::lock_guard<std::mutex> lock(m_mutex); m_ready = true; m_version = "locale"; }
-            done("Version locale compilée et prête à installer.");
+            finish("Tests réussis, mais la copie de l'exécutable a échoué : " + ec.message());
+            return;
         }
-        else done("Compilation locale échouée : " + (r.stderrText.empty() ? output : r.stderrText));
+        report.ok = true;
+        { std::lock_guard<std::mutex> lock(m_mutex); m_ready = true; m_version = "locale"; }
+        finish("Version locale compilée, tests réussis : prête à installer.");
     });
+}
+
+std::optional<Updater::BuildReport> Updater::TakeReport()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::optional<BuildReport> out = std::move(m_report);
+    m_report.reset();
+    return out;
+}
+
+bool Updater::LocalBuildReady() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_ready && m_version == "locale";
 }
 
 void Updater::PrepareContribution()

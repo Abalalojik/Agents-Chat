@@ -262,6 +262,7 @@ namespace
         if (kind == "skill") return "Demande de compétence";
         if (kind == "code") return "Travail de code";
         if (kind == "github") return "GitHub";
+        if (kind == "amelioration") return "Auto-amélioration";
         return "Demande";
     }
 }
@@ -453,6 +454,7 @@ void App::Frame()
     if (m_availReady.exchange(false))
         ApplyAvailability();
     ProcessEvents();
+    ReportSelfBuild();
     {
         std::vector<std::function<void()>> done;
         {
@@ -1140,6 +1142,27 @@ void App::DrawInboxItem(const InboxItem& item)
                 ImGui::Checkbox("J'ai vérifié moi-même que les tests passent", &m_ghInboxTests[item.id]);
         }
     }
+    else if (item.kind == "amelioration")
+    {
+        const std::string action = args.value("action", "");
+        if (action == "compiler_tester")
+            ImGui::TextWrapped("Compiler le code d'Agents Chat (%s) et lancer ses tests. Cela exécute sur ce PC le code modifié par les IA.",
+                               sub ? sub->codePath.c_str() : "?");
+        else if (action == "installer")
+        {
+            ImGui::TextWrapped("Installer la version compilée localement et relancer Agents Chat.");
+            if (m_updater.LocalBuildReady())
+                ImGui::TextColored(kColOk, "Une version locale aux tests réussis est prête. La version actuelle sera gardée (retour arrière dans Options → Mises à jour).");
+            else
+                ImGui::TextColored(kColWarn, "Aucune version locale testée n'est prête : lance d'abord « compiler et tester ».");
+        }
+        else
+        {
+            ImGui::Text("Proposer une pull request : %s", args.value("titre", std::string()).c_str());
+            ImGui::TextUnformatted(args.value("description", std::string()).c_str());
+            ImGui::TextColored(kColWarn, "Publie sur GitHub : commit de toutes les modifications locales, push d'une branche, PR.");
+        }
+    }
     else if (item.kind == "code")
     {
         ImGui::TextColored(kColDim, "Pour %s, dans %s :", CodeTwinOf(item.ai) ? CodeTwinOf(item.ai) : "?",
@@ -1200,6 +1223,8 @@ void App::DrawInboxItem(const InboxItem& item)
                     RequestSkill(item);
                 else if (item.kind == "github")
                     AcceptGitHubRequest(item);
+                else if (item.kind == "amelioration")
+                    AcceptSelfImprovement(item);
             }
             ImGui::PopStyleColor();
         }
@@ -1946,6 +1971,16 @@ bool App::StartJob(Subserver& subserver, Channel& channel, const std::vector<std
     // Tools and what they can read
     in.toolGuide = Tools::Guide(channel.type, IsDirectory(subserver.vaultPath), IsDirectory(subserver.lorePath),
                                 IsDirectory(subserver.codePath));
+    if (subserver.id == kSelfSubserverId && (channel.type == ChannelType::Code || channel.type == ChannelType::Bugs))
+        in.toolGuide +=
+            "AUTO-AMÉLIORATION (ce projet est le code d'Agents Chat lui-même) :\n"
+            "- ameliorer {\"action\": \"compiler_tester\"} : compiler le code modifié et lancer AgentChatsTests ; le résultat revient ici.\n"
+            "- ameliorer {\"action\": \"installer\"} : installer la dernière version compilée dont les tests passent (redémarre l'application, "
+            "la version actuelle est gardée pour un retour arrière).\n"
+            "- ameliorer {\"action\": \"proposer_pr\", \"titre\": \"...\", \"description\": \"quoi, pourquoi, tests\"} : "
+            "commit + branche + pull request sur GitHub.\n"
+            "Chaque action attend l'accord de l'utilisatrice. Ordre attendu : modifier, compiler_tester, corriger jusqu'au vert, "
+            "puis installer et/ou proposer_pr. Ne prétends jamais que les tests passent sans leur résultat.\n";
     in.sources.vault = IsDirectory(subserver.vaultPath) ? fs::path(Platform::Widen(subserver.vaultPath)) : fs::path();
     in.sources.lore = IsDirectory(subserver.lorePath) ? fs::path(Platform::Widen(subserver.lorePath)) : fs::path();
     in.sources.main = IsDirectory(subserver.mainPath) ? fs::path(Platform::Widen(subserver.mainPath)) : fs::path();
@@ -2328,6 +2363,36 @@ void App::HandleAction(const ConductorEvent& ev)
                                                                                  : "fermer l'issue #" + std::to_string(args.value("numero", 0));
         PostSystem(sub->id, ch->id, who + " propose de " + what + " (boîte aux lettres : rien n'est publié sans toi).");
     }
+    else if (name == "ameliorer")
+    {
+        const std::string action = args.value("action", "");
+        if (sub->id != kSelfSubserverId || (ch->type != ChannelType::Code && ch->type != ChannelType::Bugs))
+        {
+            PostSystem(sub->id, ch->id, who + " : l'auto-amélioration n'est possible que dans un salon Code du sous-serveur d'amélioration d'Agents Chat.");
+            return;
+        }
+        if (action != "compiler_tester" && action != "installer" && action != "proposer_pr")
+        {
+            PostSystem(sub->id, ch->id, who + " : action d'auto-amélioration inconnue « " + action + " ».");
+            return;
+        }
+        if (action == "proposer_pr" && Trim(args.value("titre", std::string())).empty())
+        {
+            PostSystem(sub->id, ch->id, who + " : une pull request a besoin d'un titre.");
+            return;
+        }
+        InboxItem item;
+        item.kind = "amelioration";
+        item.subserverId = sub->id;
+        item.channelId = ch->id;
+        item.ai = ev.ai;
+        item.payload = args.dump();
+        m_store.AddInboxItem(item);
+        const std::string what = action == "compiler_tester" ? "compiler et tester la version modifiée"
+                               : action == "installer"       ? "installer la version testée"
+                                                             : "proposer une pull request « " + args.value("titre", std::string()) + " »";
+        PostSystem(sub->id, ch->id, who + " propose de " + what + " (boîte aux lettres).");
+    }
     else if (name == "tache")
     {
         const auto role = ch->roles.find(ev.ai);
@@ -2461,6 +2526,90 @@ void App::AcceptGitHubRequest(const InboxItem& item)
             PostSystem(subId, chanId, outcome);
         };
     });
+}
+
+// ===========================================================================
+// Self-improvement (the built-in Agents Chat sous-serveur)
+// ===========================================================================
+
+void App::AcceptSelfImprovement(const InboxItem& item)
+{
+    json args = json::parse(item.payload, nullptr, false);
+    Subserver* sub = m_store.FindSubserver(item.subserverId);
+    if (!sub || args.is_discarded())
+        return;
+    const std::string action = args.value("action", "");
+    const std::string itemId = item.id, subId = item.subserverId, chanId = item.channelId;
+    if (!IsDirectory(sub->codePath))
+    {
+        m_store.DecideInboxItem(itemId, "refuse", "Le dossier de code d'Agents Chat est introuvable.");
+        PostSystem(subId, chanId, "Auto-amélioration impossible : le dossier de code est introuvable.");
+        return;
+    }
+    if (action == "compiler_tester")
+    {
+        if (m_updater.Busy())
+        {
+            m_store.SetError("Les mises à jour sont occupées ; réessaie dans un instant.");
+            return;
+        }
+        m_selfBuildOrigin = SelfBuildOrigin{subId, chanId, item.ai};
+        m_updater.BuildLocal(fs::path(Platform::Widen(sub->codePath)));
+        m_store.DecideInboxItem(itemId, "accepte", "Compilation et tests lancés.");
+        PostSystem(subId, chanId, "Compilation et tests de la version modifiée lancés (plusieurs minutes la première fois).");
+    }
+    else if (action == "installer")
+    {
+        if (!m_updater.LocalBuildReady())
+        {
+            m_store.SetError("Aucune version locale aux tests réussis n'est prête : lance d'abord « compiler et tester ».");
+            return;
+        }
+        m_store.DecideInboxItem(itemId, "accepte", "Installation et redémarrage.");
+        PostSystem(subId, chanId, "Installation de la version améliorée ; Agents Chat redémarre.");
+        if (!m_updater.Apply(m_hwnd))
+        {
+            m_store.DecideInboxItem(itemId, "refuse", "L'installation n'a pas pu démarrer.");
+            PostSystem(subId, chanId, "L'installation de la version améliorée n'a pas pu démarrer.");
+        }
+    }
+    else if (action == "proposer_pr")
+    {
+        const std::string repo = sub->codePath;
+        const std::string title = Trim(args.value("titre", std::string()));
+        const std::string body = args.value("description", std::string()) + "\n\nProposé depuis Agents Chat par " +
+                                 AiDisplayName(item.ai) + ", approuvé par l'utilisatrice.";
+        m_store.DecideInboxItem(itemId, "accepte", "envoi à GitHub…");
+        RunGitHub("Préparation de la pull request…", [this, repo, title, body, itemId, subId, chanId]() -> std::function<void()> {
+            std::string url;
+            const GitHub::Result r = GitHub::ProposePullRequest(repo, title, body, url);
+            return [this, r, url, itemId, subId, chanId] {
+                const std::string outcome = r.ok ? "Pull request prête : " + (url.empty() ? std::string("(lien non renvoyé par gh)") : url)
+                                                 : "Pull request impossible : " + r.error;
+                m_store.DecideInboxItem(itemId, r.ok ? "accepte" : "refuse", outcome);
+                m_ghStatus = outcome;
+                PostSystem(subId, chanId, outcome);
+            };
+        });
+    }
+}
+
+void App::ReportSelfBuild()
+{
+    std::optional<Updater::BuildReport> report = m_updater.TakeReport();
+    if (!report || !m_selfBuildOrigin)
+        return;
+    const SelfBuildOrigin origin = *m_selfBuildOrigin;
+    m_selfBuildOrigin.reset();
+    std::string text = report->summary;
+    if (!report->ok && !report->log.empty())
+        text += "\n```\n" + report->log + "\n```";
+    PostSystem(origin.subserverId, origin.channelId, text);
+    // The AI that asked reads the result, then fixes or proceeds.
+    Subserver* sub = m_store.FindSubserver(origin.subserverId);
+    Channel* ch = sub ? m_store.FindChannel(*sub, origin.channelId) : nullptr;
+    if (sub && ch && !m_conductor.Busy())
+        StartJob(*sub, *ch, {origin.ai});
 }
 
 void App::DrawGitHubDialog()
@@ -3004,16 +3153,20 @@ void App::DrawUpdatesTab()
     }
     ImGui::Spacing();
     ImGui::SeparatorText("Auto-amélioration");
-    ImGui::TextWrapped("Une copie locale du code source est utilisée par le canal d'auto-amélioration. "
-                       "Les modifications peuvent rester purement locales ou être proposées volontairement par pull request.");
-    ImGui::TextWrapped("Copie locale : %s", Platform::Narrow(m_updater.SourcePath().wstring()).c_str());
-    ImGui::TextColored(m_updater.SourceReady() ? kColOk : kColWarn, "%s",
-                       m_updater.SourceReady() ? "Code source prêt." : "Clonage en attente ou indisponible.");
+    ImGui::TextWrapped("Dans le salon « améliorations », les IA modifient le code d'Agents Chat puis demandent « compiler et tester », "
+                       "« installer » ou « proposer une pull request ». Chaque étape passe par ta boîte aux lettres ; seule une "
+                       "version dont les tests passent peut être installée, et la version remplacée reste disponible ci-dessus.");
+    const Subserver* self = m_store.FindSubserver(kSelfSubserverId);
+    const bool selfDir = self && IsDirectory(self->codePath);
+    const fs::path selfSource = selfDir ? fs::path(Platform::Widen(self->codePath)) : m_updater.SourcePath();
+    ImGui::TextWrapped("Code utilisé : %s", Platform::Narrow(selfSource.wstring()).c_str());
+    ImGui::TextColored(selfDir || m_updater.SourceReady() ? kColOk : kColWarn, "%s",
+                       selfDir || m_updater.SourceReady() ? "Code source prêt." : "Clonage en attente ou indisponible.");
     ImGui::BeginDisabled(m_updater.Busy());
-    if (!m_updater.SourceReady() && ImGui::Button("Cloner le code maintenant")) m_updater.PrepareSource();
-    if (m_updater.SourceReady())
+    if (!selfDir && !m_updater.SourceReady() && ImGui::Button("Cloner le code maintenant")) m_updater.PrepareSource();
+    if (selfDir || m_updater.SourceReady())
     {
-        if (ImGui::Button("Compiler une mise à jour locale")) m_updater.BuildLocal();
+        if (ImGui::Button("Compiler et tester une version locale")) m_updater.BuildLocal(selfSource);
         ImGui::SameLine();
         if (ImGui::Button("Préparer une contribution pour PR")) m_updater.PrepareContribution();
     }

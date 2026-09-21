@@ -11,6 +11,9 @@
 //   <root>/workspace.json                                  sous-serveurs, salons, roles
 //   <root>/subservers/<sid>/channels/<cid>/transcript.jsonl append-only, one event per line
 //   <root>/inbox.json, memory.json, tasks.json
+// The built-in "Amélioration d’Agents Chat" sous-serveur.
+inline constexpr const char* kSelfSubserverId = "agentchats-self";
+
 class Store
 {
 public:

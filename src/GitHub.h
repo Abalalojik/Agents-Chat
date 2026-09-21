@@ -32,4 +32,13 @@ namespace GitHub
     Result CreateIssue(const std::string& slug, const std::string& title, const std::string& body, Issue& created);
     Result Comment(const std::string& slug, int number, const std::string& body);
     Result Close(const std::string& slug, int number, const std::string& comment);
+
+    // Branch that receives a contribution: work already on a feature branch stays there
+    // (and updates its PR); work on the default branch goes to "amelioration/<stamp>".
+    std::string ContributionBranch(const std::string& currentBranch, const std::string& stamp);
+
+    // Commits every local change of repoDir, pushes the branch and opens (or finds) its PR.
+    // Publishes: only call after the user's explicit approval.
+    Result ProposePullRequest(const std::string& repoDir, const std::string& title, const std::string& body,
+                              std::string& prUrl);
 }

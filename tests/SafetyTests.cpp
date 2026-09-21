@@ -9,7 +9,11 @@
 #include "../src/Settings.h"
 #include "../src/Store.h"
 #include "../src/Tools.h"
+#include "../src/Updater.h"
 
+#include <chrono>
+#include <optional>
+#include <thread>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -38,6 +42,28 @@ int main(int argc, char** argv)
         for (size_t i = 0; i < issues.size() && i < 5; ++i)
             std::printf("  #%d [%s] %s\n", issues[i].number, issues[i].state.c_str(), issues[i].title.c_str());
         return r.ok ? 0 : 1;
+    }
+    if (argc > 3 && std::string(argv[1]) == "--propose-pr")
+    {
+        // PUBLISHES when <repo> has a GitHub remote: only on a throwaway repository or with approval.
+        std::string url;
+        const GitHub::Result r = GitHub::ProposePullRequest(argv[2], argv[3], "Diagnostic.", url);
+        std::printf("propose-pr: ok=%s url=%s error=%s\n", r.ok ? "true" : "false", url.c_str(), r.error.c_str());
+        return r.ok ? 0 : 1;
+    }
+    if (argc > 3 && std::string(argv[1]) == "--self-build")
+    {
+        // The self-improvement pipeline on a given source tree: configure, build, run its tests.
+        Updater updater{fs::path(argv[3])};
+        updater.BuildLocal(fs::path(argv[2]));
+        std::optional<Updater::BuildReport> report;
+        while (!(report = updater.TakeReport()))
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::printf("self-build: ok=%s built=%s tests=%s staged=%s\n%s\n--- log tail ---\n%s\n",
+                    report->ok ? "true" : "false", report->built ? "true" : "false",
+                    report->testsPassed ? "true" : "false", updater.LocalBuildReady() ? "true" : "false",
+                    report->summary.c_str(), report->log.substr(report->log.size() > 1500 ? report->log.size() - 1500 : 0).c_str());
+        return report->ok ? 0 : 1;
     }
     if (argc > 1 && std::string(argv[1]) == "--connections")
     {
@@ -333,6 +359,9 @@ int main(int argc, char** argv)
     CHECK(GitHub::RepoSlug("https://github.com/Abalalojik/Agents-Chat") == "Abalalojik/Agents-Chat");
     CHECK(GitHub::RepoSlug("https://github.com/Abalalojik/Agents-Chat.git") == "Abalalojik/Agents-Chat");
     CHECK(GitHub::RepoSlug("git@github.com:Abalalojik/Agents-Chat.git") == "Abalalojik/Agents-Chat");
+    CHECK(GitHub::ContributionBranch("main", "20260921-101112") == "amelioration/20260921-101112");
+    CHECK(GitHub::ContributionBranch("HEAD", "x") == "amelioration/x");
+    CHECK(GitHub::ContributionBranch("amelioration/20260920-090000", "x") == "amelioration/20260920-090000");
     CHECK(GitHub::RepoSlug("https://github.com/Abalalojik/Agents-Chat/issues") == "Abalalojik/Agents-Chat");
     CHECK(GitHub::RepoSlug("https://gitlab.com/a/b").empty());
     CHECK(GitHub::RepoSlug("https://github.com/a b/c").empty());       // no spaces reach gh arguments

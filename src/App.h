@@ -9,6 +9,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <optional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -141,6 +142,8 @@ private:
     void SyncIssues(const Subserver& subserver, const Channel& channel);
     void DrawGitHubDialog();
     void AcceptGitHubRequest(const InboxItem& item);
+    void AcceptSelfImprovement(const InboxItem& item);
+    void ReportSelfBuild();
     std::thread m_ghThread;
     std::atomic<bool> m_ghBusy{false};
     std::mutex m_ghMutex;
@@ -174,6 +177,9 @@ private:
     bool m_cloudLoaded = false;
     bool m_generalLoaded = false;
     bool m_selfWorkspaceConfigured = false;
+    // Who asked for the running self-improvement build, to report back in that salon.
+    struct SelfBuildOrigin { std::string subserverId, channelId, ai; };
+    std::optional<SelfBuildOrigin> m_selfBuildOrigin;
     bool m_autoUpdateStarted = false;
     std::string m_memoryEditId, m_memoryEditText;
     std::string m_newTaskTitle;

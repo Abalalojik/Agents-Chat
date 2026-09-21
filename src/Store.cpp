@@ -412,7 +412,7 @@ Subserver* Store::CreateSubserver(const std::string& name, const std::string& va
 
 bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
 {
-    constexpr const char* kId = "agentchats-self";
+    constexpr const char* kId = kSelfSubserverId;
     if (Subserver* existing = FindSubserver(kId))
     {
         const Subserver previous = *existing;

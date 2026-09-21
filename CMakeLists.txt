@@ -82,9 +82,11 @@ add_executable(AgentChatsTests
   src/ModelCatalog.cpp
   src/Store.cpp
   src/GitHub.cpp
-  src/ReleaseSignature.cpp)
+  src/ReleaseSignature.cpp
+  src/Updater.cpp)
 target_link_libraries(AgentChatsTests PRIVATE nlohmann_json::nlohmann_json ole32 shell32 uuid winhttp crypt32 ws2_32 bcrypt)
 target_compile_definitions(AgentChatsTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_definitions(AgentChatsTests PRIVATE AGENTCHATS_VERSION="${AGENTCHATS_VERSION}")
 target_compile_options(AgentChatsTests PRIVATE /utf-8 /W4 /permissive-)
 
 enable_testing()
