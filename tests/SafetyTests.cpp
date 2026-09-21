@@ -5,12 +5,14 @@
 #include "../src/Conductor.h"
 #include "../src/GitHub.h"
 #include "../src/ReleaseSignature.h"
+#include "../src/ShortContext.h"
 #include "../src/Platform.h"
 #include "../src/Settings.h"
 #include "../src/Store.h"
 #include "../src/Tools.h"
 #include "../src/Updater.h"
 
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <thread>
@@ -360,6 +362,39 @@ int main(int argc, char** argv)
     CHECK(GitHub::RepoSlug("https://github.com/Abalalojik/Agents-Chat.git") == "Abalalojik/Agents-Chat");
     CHECK(GitHub::RepoSlug("git@github.com:Abalalojik/Agents-Chat.git") == "Abalalojik/Agents-Chat");
     CHECK(GitHub::ContributionBranch("main", "20260921-101112") == "amelioration/20260921-101112");
+
+    // Short context: accent folding, stop words, relevance, and the thread budget.
+    {
+        const std::vector<std::string> terms = ShortContext::Terms("Le Château de Jalyra ÉTAIT détruit, cœur & l'été");
+        CHECK(std::find(terms.begin(), terms.end(), "chateau") != terms.end());
+        CHECK(std::find(terms.begin(), terms.end(), "jalyra") != terms.end());
+        CHECK(std::find(terms.begin(), terms.end(), "detruit") != terms.end());
+        CHECK(std::find(terms.begin(), terms.end(), "coeur") != terms.end());
+        CHECK(std::find(terms.begin(), terms.end(), "les") == terms.end());
+        CHECK(std::find(terms.begin(), terms.end(), "ete") == terms.end());
+        const std::vector<std::string> docs = {"On parle de la météo.", "Le château de Jalyra a trois tours.",
+                                               "Recette de crêpes.", "Jalyra est au nord."};
+        const std::vector<size_t> ranked = ShortContext::Rank(docs, "Combien de tours au château de Jalyra ?", 5);
+        CHECK(!ranked.empty() && ranked.front() == 1);
+        CHECK(std::find(ranked.begin(), ranked.end(), 3) != ranked.end());
+        CHECK(std::find(ranked.begin(), ranked.end(), 0) == ranked.end());
+        CHECK(ShortContext::Rank(docs, "le la de", 5).empty());
+
+        JobInput job;
+        job.userName = "Djenny";
+        std::vector<Message> thread;
+        thread.push_back({"m0", "user", "Le château de Jalyra a trois tours de basalte.", "2026-09-21T10:00:00Z", "", ""});
+        for (int i = 1; i <= 60; ++i)
+            thread.push_back({"m" + std::to_string(i), "claude", std::string(400, 'x') + " remplissage " + std::to_string(i),
+                              "2026-09-21T10:00:00Z", "", ""});
+        thread.push_back({"last", "user", "Rappelle-moi la matière des tours du château ?", "2026-09-21T11:00:00Z", "", ""});
+        const std::string convo = Conductor::BuildConversation(job, thread, "claude");
+        CHECK(convo.size() < 24000);
+        CHECK(convo.find("basalte") != std::string::npos);            // old but relevant: kept
+        CHECK(convo.find("remplissage 1\n") == std::string::npos);   // old and irrelevant: dropped
+        CHECK(convo.find("Rappelle-moi la matière") != std::string::npos);
+        CHECK(convo.find("chercher_historique") != std::string::npos);
+    }
     CHECK(GitHub::ContributionBranch("HEAD", "x") == "amelioration/x");
     CHECK(GitHub::ContributionBranch("amelioration/20260920-090000", "x") == "amelioration/20260920-090000");
     CHECK(GitHub::RepoSlug("https://github.com/Abalalojik/Agents-Chat/issues") == "Abalalojik/Agents-Chat");

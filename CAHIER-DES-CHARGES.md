@@ -89,7 +89,10 @@ Code, les IA modifient le code (écritures et agents de code approuvés), puis l
 
 - Mémoire structurée commune persistante avec déduplication sémantique et promotion de portée.
 - Contexte court préparé localement avant chaque appel afin de réduire les tokens.
-- Cible : petit modèle local chargé de résumer/classer/récupérer le contexte, sans dépendre d'une API.
+- Fait : contexte court préparé dans l'application, sans modèle ni service : fil récent intact (16 000 caractères),
+  jusqu'à 6 extraits plus anciens choisis par pertinence lexicale (BM25, accents repliés) pour la dernière demande,
+  et mémoire réduite aux notes pertinentes puis récentes au-delà de 6 000 caractères. Jamais d'Ollama.
+- Cible suivante : petit modèle embarqué pour résumer, si le classement lexical ne suffit plus.
 - Salon d'entraînement séparé pour préparer, évaluer et versionner les jeux de données de fine-tuning.
 - ChatGPT, Claude et Gemini peuvent proposer/corriger des exemples ; aucune donnée personnelle n'entre
   dans un jeu publiable sans validation et nettoyage.
@@ -189,5 +192,8 @@ mémoire commune dédupliquée, boîte aux lettres, mail/agenda Microsoft et Goo
 planification locale Windows, todo de salon, todo globale par personne, PM locaux, type Bugs GitHub et liens vers
 les issues, dépôt public AGPLv3.
 
-À achever/prouver : synchronisation `gh` bidirectionnelle, vrai test UI complet des nouvelles vues, relais d'invite,
-modèle local de contexte court, atelier de fine-tuning, console sécurisée, et port Linux natif.
+Fait depuis : synchronisation `gh` des issues, mises à jour signées, auto-amélioration (compiler/tester, installer,
+PR), contexte court local.
+
+À achever/prouver : vrai test UI complet des nouvelles vues, relais d'invite, atelier de fine-tuning, console sécurisée,
+et port Linux natif.

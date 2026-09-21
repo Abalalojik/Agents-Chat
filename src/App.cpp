@@ -1,4 +1,5 @@
 #include "App.h"
+#include "ShortContext.h"
 #include "GitHub.h"
 #include "ModelCatalog.h"
 #include "OptionsModules.h"
@@ -2019,9 +2020,46 @@ bool App::StartJob(Subserver& subserver, Channel& channel, const std::vector<std
     const auto notes = m_store.MemoryFor(subserver.id, channel.id);
     if (!notes.empty())
     {
-        ctx += "MÉMOIRE COMMUNE (ce que l'équipe a retenu) :\n";
+        // Short context: a long memory is reduced to the notes relevant to the request,
+        // then the most recent ones, within a budget.
+        constexpr size_t kMemoryBudget = 6000;
+        auto line = [](const MemoryNote* n) {
+            return "- [" + std::string(n->level == "toi" ? "toi" : n->level == "subserver" ? "sous-serveur" : "salon") + "] " + n->text + "\n";
+        };
+        size_t total = 0;
         for (const MemoryNote* n : notes)
-            ctx += "- [" + std::string(n->level == "toi" ? "toi" : n->level == "subserver" ? "sous-serveur" : "salon") + "] " + n->text + "\n";
+            total += line(n).size();
+        std::vector<size_t> order;
+        if (total <= kMemoryBudget)
+            for (size_t i = 0; i < notes.size(); ++i)
+                order.push_back(i);
+        else
+        {
+            std::vector<std::string> texts;
+            for (const MemoryNote* n : notes)
+                texts.push_back(n->text);
+            const std::string query = in.history.empty() ? std::string() : in.history.back().content;
+            order = ShortContext::Rank(texts, query, notes.size());
+            for (size_t i = notes.size(); i-- > 0;)
+                if (std::find(order.begin(), order.end(), i) == order.end())
+                    order.push_back(i);
+        }
+        std::vector<size_t> kept;
+        size_t used = 0;
+        for (size_t i : order)
+        {
+            const size_t size = line(notes[i]).size();
+            if (used + size > kMemoryBudget)
+                continue;
+            used += size;
+            kept.push_back(i);
+        }
+        std::sort(kept.begin(), kept.end());
+        ctx += "MÉMOIRE COMMUNE (ce que l'équipe a retenu) :\n";
+        for (size_t i : kept)
+            ctx += line(notes[i]);
+        if (kept.size() < notes.size())
+            ctx += "(" + std::to_string(notes.size() - kept.size()) + " notes moins liées à la demande sont omises ici ; elles restent en mémoire.)\n";
     }
     const std::vector<TaskItem> tasks = m_store.Tasks(channel.id);
     if (!tasks.empty())

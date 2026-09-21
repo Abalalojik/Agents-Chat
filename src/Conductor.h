@@ -72,12 +72,13 @@ public:
 
     // A reply's own mentions of other AIs ("@claude", "@all"/"@tous").
     static std::vector<std::string> Mentions(const std::string& text, const std::vector<std::string>& candidates);
+    // The thread as sent to one AI: short context prepared locally (public for the tests).
+    static std::string BuildConversation(const JobInput& in, const std::vector<Message>& history, const std::string& ai);
 
 private:
     void Run(JobInput input);
     void Post(ConductorEvent ev);
     std::string BuildSystemPrompt(const JobInput& in, const std::string& ai) const;
-    static std::string BuildConversation(const JobInput& in, const std::vector<Message>& history, const std::string& ai);
 
     std::thread m_thread;
     std::atomic<bool> m_busy{false};

@@ -1,6 +1,7 @@
 #include "Conductor.h"
 #include "Platform.h"
 #include "Settings.h"
+#include "ShortContext.h"
 #include "Tools.h"
 
 #include <algorithm>
@@ -179,27 +180,53 @@ std::string Conductor::BuildSystemPrompt(const JobInput& in, const std::string& 
 
 std::string Conductor::BuildConversation(const JobInput& in, const std::vector<Message>& history, const std::string& ai)
 {
-    // Most recent messages that fit a budget; the full history stays searchable.
-    const size_t budget = 40000;
-    std::vector<std::string> lines;
-    size_t used = 0;
-    for (auto it = history.rbegin(); it != history.rend(); ++it)
-    {
-        std::string who = it->sender == "user" ? (in.userName.empty() ? "L'utilisatrice" : in.userName)
-                                               : std::string(AiDisplayName(it->sender));
-        if (it->sender == "system")
+    // Short context, prepared locally: the recent thread verbatim within a budget, plus the
+    // older messages most relevant to the latest request. The full history stays searchable.
+    constexpr size_t kRecentBudget = 16000, kRelevantBudget = 6000, kRelevantMax = 6, kExcerpt = 800;
+    auto render = [&](const Message& m) {
+        std::string who = m.sender == "user" ? (in.userName.empty() ? "L'utilisatrice" : in.userName)
+                                             : std::string(AiDisplayName(m.sender));
+        if (m.sender == "system")
             who = "[Système]";
-        std::string line = who + " (" + Platform::LocalTimeOfDay(it->timestamp) + ") : " + it->content;
-        if (used + line.size() > budget && !lines.empty())
-        {
-            lines.push_back("[… messages plus anciens omis ; utilise chercher_historique au besoin]");
+        return who + " (" + Platform::LocalTimeOfDay(m.timestamp) + ") : " + m.content;
+    };
+
+    std::vector<std::string> recent;
+    size_t used = 0, firstRecent = history.size();
+    for (size_t i = history.size(); i-- > 0;)
+    {
+        std::string line = render(history[i]);
+        if (used + line.size() > kRecentBudget && !recent.empty())
             break;
-        }
         used += line.size();
-        lines.push_back(std::move(line));
+        recent.push_back(std::move(line));
+        firstRecent = i;
     }
+
     std::string out = "Fil du salon (du plus ancien au plus récent) :\n\n";
-    for (auto it = lines.rbegin(); it != lines.rend(); ++it)
+    if (firstRecent > 0)
+    {
+        std::vector<std::string> older;
+        for (size_t i = 0; i < firstRecent; ++i)
+            older.push_back(history[i].content);
+        const std::string query = history.empty() ? std::string() : history.back().content;
+        std::vector<size_t> picked = ShortContext::Rank(older, query, kRelevantMax);
+        std::sort(picked.begin(), picked.end());
+        std::string excerpts;
+        for (size_t index : picked)
+        {
+            std::string line = render(history[index]);
+            if (line.size() > kExcerpt)
+                line = line.substr(0, kExcerpt) + " […]";
+            if (excerpts.size() + line.size() > kRelevantBudget)
+                break;
+            excerpts += line + "\n\n";
+        }
+        out += "[… " + std::to_string(firstRecent) + " messages plus anciens omis ; utilise chercher_historique au besoin]\n\n";
+        if (!excerpts.empty())
+            out += "Extraits plus anciens liés à la dernière demande :\n\n" + excerpts + "Suite récente du fil :\n\n";
+    }
+    for (auto it = recent.rbegin(); it != recent.rend(); ++it)
         out += *it + "\n\n";
     out += "C'est ton tour, " + std::string(AiDisplayName(ai)) + ".";
     return out;
