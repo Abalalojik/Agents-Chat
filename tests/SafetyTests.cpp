@@ -177,6 +177,8 @@ int main(int argc, char** argv)
     CHECK(sub != nullptr);
     Channel* channel = sub ? store.CreateChannel(*sub, "mémoire", ChannelType::Detente, "Français") : nullptr;
     CHECK(channel != nullptr);
+    const std::string testSubId = sub ? sub->id : std::string();
+    const std::string testChannelId = channel ? channel->id : std::string();
     bool created = false, promoted = false;
     const MemoryNote* first = channel ? store.AddMemory("salon", channel->id, "chatgpt",
         "Préfère être appelée Djenny", &created, &promoted) : nullptr;
@@ -195,6 +197,25 @@ int main(int argc, char** argv)
     Subserver* self = store.FindSubserver("agentchats-self");
     Channel* feedback = self ? store.FindChannel(*self, "agentchats-feedback") : nullptr;
     CHECK(feedback != nullptr && feedback->type == ChannelType::Bugs);
+
+    // Folder access and Discord-like role permissions survive a reload.
+    sub = store.FindSubserver(testSubId);
+    channel = sub ? store.FindChannel(*sub, testChannelId) : nullptr;
+    CHECK(sub != nullptr && store.UpdateFolderAccess(*sub, Platform::Narrow(base.wstring()),
+        {{Platform::Narrow((base / "extra").wstring()), true}},
+        {{Platform::Narrow((base / "secret").wstring()), "cant_access"}, {"private.txt", "cant_read"}}));
+    TeamRole trusted{"Développeur local", "", true};
+    trusted.globalRead = true;
+    trusted.canWriteFiles = true;
+    trusted.manageGithub = true;
+    CHECK(channel != nullptr && store.SetRole(*channel, "chatgpt", &trusted));
+    Store reloaded(data);
+    CHECK(reloaded.Load());
+    Subserver* loadedSub = reloaded.FindSubserver(testSubId);
+    Channel* loadedChannel = loadedSub ? reloaded.FindChannel(*loadedSub, testChannelId) : nullptr;
+    CHECK(loadedSub && loadedSub->additionalFolders.size() == 1 && loadedSub->additionalFolders[0].canWrite);
+    CHECK(loadedSub && loadedSub->exclusions.size() == 2 && loadedSub->exclusions[1].mode == "cant_read");
+    CHECK(loadedChannel && loadedChannel->roles["chatgpt"].globalRead && loadedChannel->roles["chatgpt"].manageGithub);
 
     // Tasks are shared across channels and can be reassigned from the global todo.
     const TaskItem* task = channel ? store.AddTask(channel->id, "Vérifier le bug", "user", "user") : nullptr;

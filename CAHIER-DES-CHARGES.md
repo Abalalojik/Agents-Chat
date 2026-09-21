@@ -120,6 +120,31 @@ Le sous-serveur intégré « Amélioration d’Agents Chat » sert à faire évo
   secrets, historique local, arrêt du processus, limites de ressources, distinction commande humaine/agent.
 - Une console arbitraire héritant de toutes les variables et identifiants locaux est hors acceptation.
 
+## 11 bis. Administration, rôles et extensions
+
+L'administration reprend une navigation verticale inspirée des interfaces Discord/OpenAI, sans reprendre leur marque :
+
+- Accès : Général, Membres, Groupes, Autorisations et rôles, Modèles, Identité et accès, Jetons d'accès, Trusted Access ;
+- Extensions : Plugins, Connecteurs/Applications, **MCPs**, Skills, Marketplace ;
+- Fonctionnalités : Agents, agents de code, mémoire locale et automatisations.
+
+Un sous-serveur déclare un dossier principal, des dossiers supplémentaires et des exclusions. `Can Write` est une
+capacité maximale du dossier ; elle ne devient effective que si le rôle de l'agent possède aussi `Can Write`.
+Une exclusion `Can't access` masque et interdit le chemin ; `Can't read` permet d'en voir le nom mais jamais le contenu.
+
+Les permissions sont attribuées aux rôles, façon Discord : Global Read, écriture de fichiers, gestion des tâches et
+gestion GitHub. Global Read signifie tout l'ordinateur en lecture, mais son application exige une CLI locale authentifiée.
+Un backend API et un invité restent techniquement bloqués même si leur rôle est mal configuré.
+
+Chaque plugin/connector/skill possède un manifeste, une provenance, une version, des capacités demandées et un état
+activé/désactivé. L'activation peut être limitée par sous-serveur et par rôle. Le marketplace vérifie signature/provenance,
+affiche les permissions avant installation, et permet mise à jour, désactivation et désinstallation récupérable.
+
+`MCPs` est un menu principal, jamais un sous-menu d'un connecteur. Chaque serveur affiche son nom, son transport
+(`stdio`, HTTP ou SSE), sa commande ou URL, sa méthode d'authentification, la référence de son secret local, ses
+sous-serveurs et rôles autorisés, son état de connexion et son dernier diagnostic. Les secrets eux-mêmes restent dans
+le coffre du système et ne sont ni affichés après saisie, ni écrits dans le dépôt ou dans un manifeste exportable.
+
 ## 12. Portabilité Linux
 
 Les formats de données et la majorité de la logique sont réutilisables. L'interface Win32/DirectX, le lancement

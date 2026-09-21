@@ -151,6 +151,15 @@ std::string Conductor::BuildSystemPrompt(const JobInput& in, const std::string& 
         const auto instr = in.roleInstructions.find(ai);
         if (instr != in.roleInstructions.end() && !instr->second.empty())
             s += instr->second + "\n";
+        const auto permissions = in.roles.find(ai);
+        if (permissions != in.roles.end())
+        {
+            s += "Autorisations du rôle : ";
+            s += permissions->second.globalRead ? "Global Read (effectif seulement via une CLI locale), " : "lecture configurée, ";
+            s += permissions->second.canWriteFiles ? "Can Write autorisé, " : "aucune écriture de fichier, ";
+            s += permissions->second.manageTasks ? "gestion des tâches" : "pas de gestion des tâches";
+            s += permissions->second.manageGithub ? ", gestion GitHub.\n" : ", pas de gestion GitHub.\n";
+        }
     }
     if (!in.lead.empty() && in.lead != ai)
         s += "Le chef d'équipe est " + std::string(AiDisplayName(in.lead)) + " (@" + in.lead + ") : rends-lui compte en le mentionnant quand tu as fini ou que tu bloques.\n";
@@ -264,13 +273,20 @@ void Conductor::Run(JobInput in)
             std::string visible;
             const std::vector<Tools::Call> calls = Tools::Extract(r.text, visible);
             std::string reads;
+            Tools::Sources effectiveSources = in.sources;
+            const auto role = in.roles.find(ai);
+            const auto backend = in.backend.find(ai);
+            const bool localCli = backend != in.backend.end() &&
+                                  (backend->second == BackendKind::ClaudeCli || backend->second == BackendKind::CodexCli ||
+                                   backend->second == BackendKind::GeminiCli);
+            effectiveSources.globalRead = localCli && role != in.roles.end() && role->second.globalRead;
             for (const Tools::Call& call : calls)
             {
                 if (Tools::IsReadTool(call.name))
                 {
                     post(ConductorEvent::Kind::Notice, ai, std::string(AiDisplayName(ai)) + " consulte : " + call.name +
                                                                " " + call.args.dump());
-                    reads += "— " + call.name + " " + call.args.dump() + "\n" + Tools::RunRead(call, in.sources, in.type) + "\n\n";
+                    reads += "— " + call.name + " " + call.args.dump() + "\n" + Tools::RunRead(call, effectiveSources, in.type) + "\n\n";
                 }
                 else
                 {

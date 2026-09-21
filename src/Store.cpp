@@ -202,6 +202,15 @@ bool Store::Load()
                 sub.vaultPath = s.value("vaultPath", "");
                 sub.lorePath = s.value("lorePath", "");
                 sub.codePath = s.value("codePath", "");
+                sub.mainPath = s.value("mainPath", !sub.codePath.empty() ? sub.codePath : sub.vaultPath);
+                for (const json& folder : s.value("additionalFolders", json::array()))
+                    if (folder.is_object())
+                        sub.additionalFolders.push_back({folder.value("path", ""), folder.value("canWrite", false)});
+                for (const json& rule : s.value("exclusions", json::array()))
+                    if (rule.is_string())
+                        sub.exclusions.push_back({rule.get<std::string>(), "cant_access"});
+                    else if (rule.is_object())
+                        sub.exclusions.push_back({rule.value("path", ""), rule.value("mode", "cant_access")});
                 for (const json& c : s.value("channels", json::array()))
                 {
                     Channel ch;
@@ -223,7 +232,9 @@ bool Store::Load()
                     const json roles = c.value("roles", json::object());
                     for (const auto& [ai, r] : roles.items())
                         if (r.is_object())
-                            ch.roles[ai] = {r.value("name", ""), r.value("instructions", ""), r.value("isLead", false)};
+                            ch.roles[ai] = {r.value("name", ""), r.value("instructions", ""), r.value("isLead", false),
+                                            r.value("globalRead", false), r.value("canWriteFiles", false),
+                                            r.value("manageTasks", true), r.value("manageGithub", false)};
                     sub.channels.push_back(std::move(ch));
                 }
                 m_subservers.push_back(std::move(sub));
@@ -279,6 +290,12 @@ bool Store::SaveWorkspace()
     for (const Subserver& sub : m_subservers)
     {
         json channels = json::array();
+        json additionalFolders = json::array();
+        for (const Subserver::FolderAccess& folder : sub.additionalFolders)
+            additionalFolders.push_back({{"path", folder.path}, {"canWrite", folder.canWrite}});
+        json exclusions = json::array();
+        for (const Subserver::ExclusionRule& rule : sub.exclusions)
+            exclusions.push_back({{"path", rule.path}, {"mode", rule.mode}});
         for (const Channel& ch : sub.channels)
         {
             json aiLevels = json::object();
@@ -286,7 +303,9 @@ bool Store::SaveWorkspace()
                 aiLevels[ai] = ModelLevelKey(l);
             json roles = json::object();
             for (const auto& [ai, r] : ch.roles)
-                roles[ai] = {{"name", r.name}, {"instructions", r.instructions}, {"isLead", r.isLead}};
+                roles[ai] = {{"name", r.name}, {"instructions", r.instructions}, {"isLead", r.isLead},
+                             {"globalRead", r.globalRead}, {"canWriteFiles", r.canWriteFiles},
+                             {"manageTasks", r.manageTasks}, {"manageGithub", r.manageGithub}};
             channels.push_back({{"id", ch.id},
                                 {"name", ch.name},
                                 {"type", ChannelTypeKey(ch.type)},
@@ -297,6 +316,9 @@ bool Store::SaveWorkspace()
         }
         subs.push_back({{"id", sub.id},
                         {"name", sub.name},
+                        {"mainPath", sub.mainPath},
+                        {"additionalFolders", additionalFolders},
+                        {"exclusions", exclusions},
                         {"vaultPath", sub.vaultPath},
                         {"lorePath", sub.lorePath},
                         {"codePath", sub.codePath},
@@ -362,6 +384,7 @@ Subserver* Store::CreateSubserver(const std::string& name, const std::string& va
     sub.vaultPath = vaultPath;
     sub.lorePath = lorePath;
     sub.codePath = codePath;
+    sub.mainPath = !codePath.empty() ? codePath : vaultPath;
     m_subservers.push_back(std::move(sub));
     if (!SaveWorkspace())
     {
@@ -381,6 +404,7 @@ bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
         if (!codePath.empty() && existing->codePath != codePath)
         {
             existing->codePath = codePath;
+            existing->mainPath = codePath;
             changed = true;
         }
         for (Channel& channel : existing->channels)
@@ -407,6 +431,7 @@ bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
     sub.id = kId;
     sub.name = "Amélioration d’Agents Chat";
     sub.codePath = codePath;
+    sub.mainPath = codePath;
 
     Channel discussion;
     discussion.id = "agentchats-feedback";
@@ -446,6 +471,25 @@ bool Store::UpdateSources(Subserver& subserver, const std::string& vaultPath, co
     subserver.vaultPath = vaultPath;
     subserver.lorePath = lorePath;
     subserver.codePath = codePath;
+    if (!SaveWorkspace())
+    {
+        subserver = previous;
+        return false;
+    }
+    return true;
+}
+
+bool Store::UpdateFolderAccess(Subserver& subserver, const std::string& mainPath,
+                               const std::vector<Subserver::FolderAccess>& additionalFolders,
+                               const std::vector<Subserver::ExclusionRule>& exclusions)
+{
+    const Subserver previous = subserver;
+    subserver.mainPath = mainPath;
+    subserver.additionalFolders = additionalFolders;
+    subserver.exclusions = exclusions;
+    // Compatibility while the specialized salon tools are being migrated.
+    subserver.vaultPath = mainPath;
+    subserver.codePath = mainPath;
     if (!SaveWorkspace())
     {
         subserver = previous;

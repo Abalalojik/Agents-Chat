@@ -37,7 +37,13 @@ namespace Tools
     // Folders an AI may read in this salon.
     struct Sources
     {
+        struct Folder { std::filesystem::path path; bool canWrite = false; };
+        struct Exclusion { std::filesystem::path path; std::string mode; };
         std::filesystem::path vault, lore;
+        std::filesystem::path main;
+        std::vector<Folder> additional;
+        std::vector<Exclusion> exclusions;
+        bool globalRead = false;
         std::filesystem::path dataRoot;   // for transcripts
         std::string subserverId;
         std::vector<std::string> channelIds; // salons of the sous-serveur

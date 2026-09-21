@@ -29,6 +29,9 @@ public:
     bool EnsureSelfImprovementSubserver(const std::string& codePath);
     bool UpdateSources(Subserver& subserver, const std::string& vaultPath, const std::string& lorePath,
                        const std::string& codePath);
+    bool UpdateFolderAccess(Subserver& subserver, const std::string& mainPath,
+                            const std::vector<Subserver::FolderAccess>& additionalFolders,
+                            const std::vector<Subserver::ExclusionRule>& exclusions);
     Channel* CreateChannel(Subserver& subserver, const std::string& name, ChannelType type,
                            const std::string& language);
     bool RenameSubserver(Subserver& subserver, const std::string& name);

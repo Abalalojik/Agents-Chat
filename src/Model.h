@@ -39,6 +39,10 @@ struct TeamRole
     std::string name;
     std::string instructions;
     bool isLead = false;
+    bool globalRead = false;
+    bool canWriteFiles = false;
+    bool manageTasks = true;
+    bool manageGithub = false;
 };
 
 struct RolePreset
@@ -95,8 +99,22 @@ inline constexpr const char* kLanguages[] = {
 // server in a chat app. Its sources are shared by all its salons.
 struct Subserver
 {
+    struct FolderAccess
+    {
+        std::string path;
+        bool canWrite = false;
+    };
+    struct ExclusionRule
+    {
+        std::string path;
+        std::string mode = "cant_access"; // cant_access or cant_read
+    };
+
     std::string id;
     std::string name;
+    std::string mainPath; // primary folder shared with chat and code agents
+    std::vector<FolderAccess> additionalFolders;
+    std::vector<ExclusionRule> exclusions;
     std::string vaultPath; // Obsidian vault (analysis / relaxation)
     std::string lorePath;  // canon reference, read-only except lore consolidation
     std::string codePath;  // project folder for code channels

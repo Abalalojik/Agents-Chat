@@ -32,6 +32,7 @@ struct JobInput
     std::map<std::string, ModelChoice> model;
     std::string lead;                     // team lead id, "" if none
     std::map<std::string, std::string> roleName, roleInstructions;
+    std::map<std::string, TeamRole> roles;
     std::string toolGuide;                // tools protocol for this salon type
     Tools::Sources sources;               // what reading tools may open
     std::string context;                  // extra context (memory, sources) for the prompt

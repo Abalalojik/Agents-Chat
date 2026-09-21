@@ -401,15 +401,19 @@ void App::Frame()
     const float scale = ImGui::GetStyle().FontScaleDpi;
     const float height = ImGui::GetContentRegionAvail().y;
     const float total = ImGui::GetContentRegionAvail().x;
-    const float center = std::max(200.0f, total - (kSubserverColumnWidth + kChannelColumnWidth + kMembersColumnWidth) * scale);
+    const float membersWidth = m_showMembers ? kMembersColumnWidth : 0.0f;
+    const float center = std::max(200.0f, total - (kSubserverColumnWidth + kChannelColumnWidth + membersWidth) * scale);
 
     DrawSubserverColumn(height);
     ImGui::SameLine(0, 0);
     DrawChannelColumn(height);
     ImGui::SameLine(0, 0);
     DrawCenter(center, height);
-    ImGui::SameLine(0, 0);
-    DrawMembersColumn(height);
+    if (m_showMembers)
+    {
+        ImGui::SameLine(0, 0);
+        DrawMembersColumn(height);
+    }
 
     DrawCreateSubserverPopup();
     DrawEditSourcesPopup();
@@ -552,6 +556,9 @@ void App::DrawChannelColumn(float height)
         if (ImGui::Button("...##serverOptions", ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())))
         {
             m_renameText = sub->name;
+            m_editMain = sub->mainPath;
+            m_editAdditionalFolders = sub->additionalFolders;
+            m_editExclusions = sub->exclusions;
             m_editVault = sub->vaultPath;
             m_editLore = sub->lorePath;
             m_editCode = sub->codePath;
@@ -572,9 +579,9 @@ void App::DrawChannelColumn(float height)
             ImGui::TextColored(IsDirectory(path) ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : kColError, "%s", name.c_str());
             ImGui::SetItemTooltip("%s", path.c_str());
         };
-        source("Vault", sub->vaultPath);
-        source("Lore ", sub->lorePath);
-        source("Code ", sub->codePath);
+        source("Principal", sub->mainPath);
+        if (!sub->additionalFolders.empty())
+            ImGui::TextColored(kColDim, "+ %d autre(s) dossier(s)", static_cast<int>(sub->additionalFolders.size()));
         ImGui::Spacing();
 
         for (ChannelType type : kChannelTypes)
@@ -745,43 +752,21 @@ void App::DrawChannelView(Subserver& subserver, Channel& channel, float width, f
     // Header
     ImGui::Text("# %s", channel.name.c_str());
     ImGui::SameLine();
-    ImGui::TextColored(kColDim, "·  %s  ·  %s  ·", ChannelTypeLabel(channel.type), subserver.name.c_str());
-    ImGui::SameLine();
-    std::string language = channel.language;
-    if (LanguagePicker("##channelLanguage", language, 150.0f * scale))
-        m_store.SetChannelLanguage(channel, language);
-    ImGui::SetItemTooltip("Langue dans laquelle les IA répondent dans ce salon");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f * scale);
-    if (ImGui::BeginCombo("##channelLevel", ModelLevelLabel(channel.level)))
-    {
-        for (ModelLevel level : kLevels)
-            if (ImGui::Selectable(ModelLevelLabel(level), channel.level == level))
-                m_store.SetChannelLevel(channel, level);
-        ImGui::EndCombo();
-    }
-    ImGui::SetItemTooltip("Niveau de modèle des IA dans ce salon (réglable par IA dans « Membres »)");
-    if (channel.type == ChannelType::Bugs)
-    {
+    ImGui::TextColored(kColDim, "·  %s  ·  %s", ChannelTypeLabel(channel.type), subserver.name.c_str());
+    const float headerButtons = 195.0f * scale;
+    if (ImGui::GetCursorPosX() < ImGui::GetContentRegionMax().x - headerButtons)
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - headerButtons);
+    else
         ImGui::SameLine();
-        if (ImGui::Button("Issues GitHub"))
-        {
-            const std::string repo = GithubUrlFor(subserver.codePath);
-            if (repo.empty())
-                m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
-            else
-                ShellExecuteW(nullptr, L"open", Platform::Widen(repo + "/issues").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Nouveau bug"))
-        {
-            const std::string repo = GithubUrlFor(subserver.codePath);
-            if (repo.empty())
-                m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
-            else
-                ShellExecuteW(nullptr, L"open", Platform::Widen(repo + "/issues/new").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        }
+    if (ImGui::SmallButton("Options du chat"))
+    {
+        m_chatOptionsAi = "salon";
+        m_showChatOptions = true;
+        m_focusChatOptions = true;
     }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(m_showMembers ? "Masquer membres" : "Membres"))
+        m_showMembers = !m_showMembers;
     ImGui::Separator();
 
     const bool busyHere = m_conductor.Busy() && m_jobChannel == channel.id;
@@ -1306,33 +1291,18 @@ void App::DrawMemberRow(Channel* channel, const std::string& ai, bool troupe)
     dl->AddCircleFilled(ImVec2(pos.x + r, pos.y + ImGui::GetTextLineHeight() * 0.5f), r, ImGui::GetColorU32(PresenceColor(chat.state)));
     ImGui::Dummy(ImVec2(r * 2.0f + 6.0f * scale, ImGui::GetTextLineHeight()));
     ImGui::SameLine();
-    ImGui::TextColored(p.color, "%s", p.name);
-
-    const float indent = r * 2.0f + 6.0f * scale + ImGui::GetStyle().ItemSpacing.x;
-    ImGui::Indent(indent);
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextColored(PresenceColor(chat.state), "%s", PresenceText(chat, true).c_str());
-    if (!troupe)
-        if (const char* twin = CodeTwinOf(ai))
-        {
-            ImGui::PushID("code");
-            const Presence code = m_settings.GetPresence(ai, "code");
-            const bool working = m_codeWorker.IsRunning(ai);
-            const ImVec4 color = working ? kColAccent : code.state == PresenceState::NotConnected ? kColDim : PresenceColor(code.state);
-            ImGui::TextColored(color, "%s : %s", twin, working ? "travaille…" : PresenceText(code, false).c_str());
-            ImGui::PopID();
-        }
-    if (channel)
+    ImGui::PushStyleColor(ImGuiCol_Text, p.color);
+    if (ImGui::Selectable(p.name, false))
     {
-        const auto role = channel->roles.find(ai);
-        const std::string roleLabel = role != channel->roles.end() ? "rôle : " + role->second.name : "rôle : aucun";
-        ImGui::TextColored(role != channel->roles.end() && role->second.isLead ? kColWarn : kColDim,
-                           "%s", roleLabel.c_str());
+        m_chatOptionsAi = ai;
+        m_showChatOptions = true;
+        m_focusChatOptions = true;
     }
-    ImGui::PopTextWrapPos();
-    ImGui::Unindent(indent);
-    ImGui::Spacing();
+    ImGui::PopStyleColor();
+    ImGui::SetItemTooltip("%s · cliquer pour les options", PresenceText(chat, true).c_str());
     ImGui::PopID();
+    (void)channel;
+    (void)troupe;
 }
 
 void App::DrawMembersColumn(float height)
@@ -1354,10 +1324,11 @@ void App::DrawMembersColumn(float height)
         dl->AddCircleFilled(ImVec2(pos.x + r, pos.y + ImGui::GetTextLineHeight() * 0.5f), r, ImGui::GetColorU32(kColOk));
         ImGui::Dummy(ImVec2(r * 2.0f + 6.0f * scale, ImGui::GetTextLineHeight()));
         ImGui::SameLine();
-        ImGui::TextColored(ParticipantFor("user").color, "%s",
-                           m_settings.UserName().empty() ? "Toi" : m_settings.UserName().c_str());
-        if (ImGui::SmallButton("Ma todo"))
+        ImGui::PushStyleColor(ImGuiCol_Text, ParticipantFor("user").color);
+        if (ImGui::Selectable(m_settings.UserName().empty() ? "Toi" : m_settings.UserName().c_str(), false))
             OpenTodo("user");
+        ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Ouvrir ma todo");
         ImGui::Spacing();
     }
     for (const char* ai : kPlanAis)
@@ -1368,9 +1339,6 @@ void App::DrawMembersColumn(float height)
     ImGui::Spacing();
     for (const char* ai : {"mistral", "deepseek", "grok"})
         DrawMemberRow(detente ? channel : nullptr, ai, true);
-
-    if (channel)
-        DrawTaskBoard(*channel);
 
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -1649,6 +1617,7 @@ bool App::StartJob(Subserver& subserver, Channel& channel, const std::vector<std
     {
         in.roleName[ai] = role.name;
         in.roleInstructions[ai] = role.instructions;
+        in.roles[ai] = role;
     }
 
     // Tools and what they can read
@@ -1656,6 +1625,13 @@ bool App::StartJob(Subserver& subserver, Channel& channel, const std::vector<std
                                 IsDirectory(subserver.codePath));
     in.sources.vault = IsDirectory(subserver.vaultPath) ? fs::path(Platform::Widen(subserver.vaultPath)) : fs::path();
     in.sources.lore = IsDirectory(subserver.lorePath) ? fs::path(Platform::Widen(subserver.lorePath)) : fs::path();
+    in.sources.main = IsDirectory(subserver.mainPath) ? fs::path(Platform::Widen(subserver.mainPath)) : fs::path();
+    for (const Subserver::FolderAccess& folder : subserver.additionalFolders)
+        if (IsDirectory(folder.path))
+            in.sources.additional.push_back({fs::path(Platform::Widen(folder.path)), folder.canWrite});
+    for (const Subserver::ExclusionRule& rule : subserver.exclusions)
+        if (!Trim(rule.path).empty())
+            in.sources.exclusions.push_back({fs::path(Platform::Widen(rule.path)), rule.mode});
     in.sources.dataRoot = m_store.Root();
     in.sources.subserverId = subserver.id;
     in.sources.channelId = channel.id;
@@ -1664,6 +1640,16 @@ bool App::StartJob(Subserver& subserver, Channel& channel, const std::vector<std
 
     // Context: memory, tasks, code sessions
     std::string ctx;
+    if (!in.sources.main.empty() || !in.sources.additional.empty())
+    {
+        ctx += "DOSSIERS AUTORISÉS (utilise ces alias sans demander leur chemin local) :\n";
+        if (!in.sources.main.empty())
+            ctx += "- source=principal (lecture)\n";
+        for (size_t i = 0; i < in.sources.additional.size(); ++i)
+            ctx += "- source=dossier_" + std::to_string(i) +
+                   (in.sources.additional[i].canWrite ? " (Can Write si le rôle l'autorise)\n" : " (lecture)\n");
+        ctx += "Avec Global Read effectif, source=global accepte un chemin absolu. Les exclusions restent prioritaires.\n";
+    }
     const auto notes = m_store.MemoryFor(subserver.id, channel.id);
     if (!notes.empty())
     {
@@ -1929,6 +1915,12 @@ void App::HandleAction(const ConductorEvent& ev)
     }
     else if (name == "tache")
     {
+        const auto role = ch->roles.find(ev.ai);
+        if (role == ch->roles.end() || !role->second.manageTasks)
+        {
+            PostSystem(sub->id, ch->id, who + " n'a pas la permission de gérer les tâches dans ce salon.");
+            return;
+        }
         const std::string action = args.value("action", "creer");
         const std::string title = Trim(args.value("titre", ""));
         if (title.empty())
@@ -2021,16 +2013,14 @@ void App::DrawCreateSubserverPopup()
         ImGui::SetKeyboardFocusHere();
     ImGui::InputText("##name", &m_newSubName);
     ImGui::Spacing();
-    ImGui::TextColored(kColDim, "Sources partagées par tous les salons (facultatives, modifiables plus tard).");
-    bool valid = FolderField("Vault Obsidian", m_newSubVault, L"Choisir le vault Obsidian");
-    valid = FolderField("Dossier lore", m_newSubLore, L"Choisir le dossier lore") && valid;
-    valid = FolderField("Dossier de code", m_newSubCode, L"Choisir le dossier de code") && valid;
+    ImGui::TextColored(kColDim, "Dossier principal partagé avec les salons (facultatif, modifiable plus tard).");
+    bool valid = FolderField("Dossier principal", m_newSubCode, L"Choisir le dossier principal");
     const std::string name = Trim(m_newSubName);
     ImGui::Spacing();
     ImGui::BeginDisabled(name.empty() || !valid);
     if (ImGui::Button("Créer"))
     {
-        if (Subserver* sub = m_store.CreateSubserver(name, Trim(m_newSubVault), Trim(m_newSubLore), Trim(m_newSubCode)))
+        if (Subserver* sub = m_store.CreateSubserver(name, Trim(m_newSubCode), "", Trim(m_newSubCode)))
         {
             m_selectedSubserver = sub->id;
             m_selectedChannel.clear();
@@ -2053,8 +2043,8 @@ void App::DrawEditSourcesPopup()
         m_openEditSources = false;
     }
     const float scale = ImGui::GetStyle().FontScaleDpi;
-    ImGui::SetNextWindowSize(ImVec2(560.0f * scale, 0.0f));
-    if (!ImGui::BeginPopupModal("Options du sous-serveur", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    ImGui::SetNextWindowSize(ImVec2(720.0f * scale, 720.0f * scale), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Options du sous-serveur"))
         return;
     Subserver* sub = m_store.FindSubserver(m_selectedSubserver);
     if (!sub)
@@ -2066,15 +2056,65 @@ void App::DrawEditSourcesPopup()
     ImGui::TextUnformatted("Nom");
     ImGui::SetNextItemWidth(-1);
     ImGui::InputText("##serverName", &m_renameText);
-    ImGui::SeparatorText("Sources partagées");
-    bool valid = FolderField("Vault Obsidian", m_editVault, L"Choisir le vault Obsidian");
-    valid = FolderField("Dossier lore", m_editLore, L"Choisir le dossier lore") && valid;
-    valid = FolderField("Dossier de code", m_editCode, L"Choisir le dossier de code") && valid;
+    ImGui::SeparatorText("Dossier principal");
+    bool valid = FolderField("Dossier principal", m_editMain, L"Choisir le dossier principal");
+    ImGui::TextColored(kColDim, "Lecture pour le chat ; dossier de travail des salons Code et Bugs.");
+
+    ImGui::SeparatorText("Autres dossiers");
+    for (size_t i = 0; i < m_editAdditionalFolders.size();)
+    {
+        ImGui::PushID(static_cast<int>(i));
+        valid = FolderField("Dossier", m_editAdditionalFolders[i].path, L"Ajouter un dossier") && valid;
+        ImGui::Checkbox("Can Write", &m_editAdditionalFolders[i].canWrite);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Retirer"))
+        {
+            m_editAdditionalFolders.erase(m_editAdditionalFolders.begin() + static_cast<std::ptrdiff_t>(i));
+            ImGui::PopID();
+            continue;
+        }
+        ImGui::Separator();
+        ImGui::PopID();
+        ++i;
+    }
+    if (ImGui::Button("Ajouter un dossier"))
+        m_editAdditionalFolders.push_back({});
+
+    ImGui::SeparatorText("Exclusions");
+    ImGui::TextColored(kColDim, "Chemin absolu ou relatif à un dossier autorisé.");
+    for (size_t i = 0; i < m_editExclusions.size();)
+    {
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::SetNextItemWidth(360.0f * scale);
+        ImGui::InputTextWithHint("##excludedPath", "Dossier ou fichier exclu…", &m_editExclusions[i].path);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(125.0f * scale);
+        const bool noAccess = m_editExclusions[i].mode == "cant_access";
+        if (ImGui::BeginCombo("##exclusionMode", noAccess ? "Can't access" : "Can't read"))
+        {
+            if (ImGui::Selectable("Can't access", noAccess)) m_editExclusions[i].mode = "cant_access";
+            if (ImGui::Selectable("Can't read", !noAccess)) m_editExclusions[i].mode = "cant_read";
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Retirer"))
+        {
+            m_editExclusions.erase(m_editExclusions.begin() + static_cast<std::ptrdiff_t>(i));
+            ImGui::PopID();
+            continue;
+        }
+        ImGui::PopID();
+        ++i;
+    }
+    if (ImGui::Button("Ajouter une exclusion"))
+        m_editExclusions.push_back({});
+
     ImGui::BeginDisabled(!valid || Trim(m_renameText).empty());
     if (ImGui::Button("Enregistrer"))
     {
         m_store.RenameSubserver(*sub, Trim(m_renameText));
-        m_store.UpdateSources(*sub, Trim(m_editVault), Trim(m_editLore), Trim(m_editCode));
+        m_store.UpdateFolderAccess(*sub, Trim(m_editMain),
+                                   m_editAdditionalFolders, m_editExclusions);
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
@@ -2318,6 +2358,9 @@ void App::DrawChatOptionsWindow()
 
     const float tabsWidth = 150.0f * scale;
     ImGui::BeginChild("##aiTabs", ImVec2(tabsWidth, 0), ImGuiChildFlags_Borders);
+    if (ImGui::Selectable("Salon", m_chatOptionsAi == "salon"))
+        m_chatOptionsAi = "salon";
+    ImGui::Separator();
     ImGui::TextColored(kColDim, "AGENTS");
     for (const char* ai : {"chatgpt", "claude", "gemini", "mistral", "deepseek", "grok"})
     {
@@ -2335,6 +2378,49 @@ void App::DrawChatOptionsWindow()
                       ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
 
     const std::string ai = m_chatOptionsAi;
+    if (ai == "salon")
+    {
+        ImGui::Text("Options de # %s", channel->name.c_str());
+        ImGui::SeparatorText("Réponses");
+        std::string language = channel->language;
+        ImGui::TextUnformatted("Langue");
+        if (LanguagePicker("##optionsLanguage", language, 220.0f * scale))
+            m_store.SetChannelLanguage(*channel, language);
+        ImGui::TextUnformatted("Niveau par défaut");
+        ImGui::SetNextItemWidth(220.0f * scale);
+        if (ImGui::BeginCombo("##optionsLevel", ModelLevelLabel(channel->level)))
+        {
+            for (ModelLevel level : kLevels)
+                if (ImGui::Selectable(ModelLevelLabel(level), channel->level == level))
+                    m_store.SetChannelLevel(*channel, level);
+            ImGui::EndCombo();
+        }
+        if (channel->type == ChannelType::Bugs)
+        {
+            ImGui::Spacing();
+            ImGui::SeparatorText("GitHub");
+            if (ImGui::Button("Voir les issues"))
+            {
+                const std::string repo = GithubUrlFor(sub->codePath);
+                if (repo.empty())
+                    m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
+                else
+                    ShellExecuteW(nullptr, L"open", Platform::Widen(repo + "/issues").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Nouveau bug"))
+            {
+                const std::string repo = GithubUrlFor(sub->codePath);
+                if (repo.empty())
+                    m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
+                else
+                    ShellExecuteW(nullptr, L"open", Platform::Widen(repo + "/issues/new").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+        }
+        DrawTaskBoard(*channel);
+    }
+    else
+    {
     const Participant& participant = ParticipantFor(ai);
     ImGui::TextColored(participant.color, "%s", participant.name);
     ImGui::SameLine();
@@ -2398,6 +2484,21 @@ void App::DrawChatOptionsWindow()
     if (ImGui::Button("Modifier le rôle"))
         ImGui::OpenPopup("##role");
     DrawRoleMenu(*channel, ai);
+    if (role != channel->roles.end())
+    {
+        ImGui::SeparatorText("Autorisations du rôle");
+        TeamRole edited = role->second;
+        bool changed = false;
+        changed |= ImGui::Checkbox("Global Read — tout l'ordinateur en lecture", &edited.globalRead);
+        changed |= ImGui::Checkbox("Can Write — dossiers marqués Can Write", &edited.canWriteFiles);
+        changed |= ImGui::Checkbox("Gérer les tâches", &edited.manageTasks);
+        changed |= ImGui::Checkbox("Gérer les issues GitHub", &edited.manageGithub);
+        if (edited.globalRead)
+            ImGui::TextColored(kColWarn, "Effectif uniquement via une CLI locale authentifiée ; API et invités restent bloqués.");
+        if (changed)
+            m_store.SetRole(*channel, ai, &edited);
+    }
+    }
 
     ImGui::EndChild();
     ImGui::End();

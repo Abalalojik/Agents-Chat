@@ -34,7 +34,13 @@ namespace Tools
         bool IsTextNote(const fs::path& p)
         {
             const std::wstring ext = p.extension().wstring();
-            return _wcsicmp(ext.c_str(), L".md") == 0 || _wcsicmp(ext.c_str(), L".txt") == 0;
+            for (const wchar_t* allowed : {L".md", L".txt", L".json", L".jsonl", L".yaml", L".yml", L".toml",
+                                           L".ini", L".cfg", L".xml", L".csv", L".cpp", L".c", L".h", L".hpp",
+                                           L".cs", L".py", L".js", L".ts", L".tsx", L".jsx", L".java", L".rs",
+                                           L".go", L".sh", L".ps1", L".bat", L".cmake", L".sql", L".html", L".css"})
+                if (_wcsicmp(ext.c_str(), allowed) == 0)
+                    return true;
+            return p.filename() == L"CMakeLists.txt" || p.filename() == L"Dockerfile";
         }
 
         bool Hidden(const fs::path& relative)
@@ -53,7 +59,35 @@ namespace Tools
             const std::string source = args.value("source", "vault");
             if (source == "lore")
                 return src.lore.empty() ? nullptr : &src.lore;
+            if (source == "principal")
+                return src.main.empty() ? nullptr : &src.main;
+            if (source.rfind("dossier_", 0) == 0)
+            {
+                try
+                {
+                    const size_t index = static_cast<size_t>(std::stoul(source.substr(8)));
+                    return index < src.additional.size() ? &src.additional[index].path : nullptr;
+                }
+                catch (...) { return nullptr; }
+            }
             return src.vault.empty() ? nullptr : &src.vault;
+        }
+
+        std::string ExclusionMode(const Sources& src, const fs::path& root, const fs::path& target)
+        {
+            std::error_code ec;
+            const fs::path canonicalTarget = fs::weakly_canonical(target, ec);
+            for (const Sources::Exclusion& rule : src.exclusions)
+            {
+                const fs::path candidate = rule.path.is_absolute() ? rule.path : root / rule.path;
+                const fs::path canonicalRule = fs::weakly_canonical(candidate, ec);
+                std::wstring base = canonicalRule.wstring();
+                const std::wstring value = canonicalTarget.wstring();
+                if (!base.empty() && base.back() != L'\\') base += L'\\';
+                if (value == canonicalRule.wstring() || value.rfind(base, 0) == 0)
+                    return rule.mode;
+            }
+            return {};
         }
 
         std::string Rel(const fs::path& root, const fs::path& p)
@@ -371,15 +405,28 @@ namespace Tools
 
         if (type == ChannelType::Code || type == ChannelType::Bugs)
             return "Pas d'accès au vault ni au lore dans un salon d'ingénierie.";
+        fs::path globalRoot;
         const fs::path* root = RootFor(a, src);
+        const std::string source = a.value("source", "vault");
+        if (source == "global" && src.globalRead)
+        {
+            const std::string raw = call.name == "lister" ? a.value("dossier", "") : a.value("chemin", "");
+            const fs::path absolute = fs::path(Platform::Widen(raw));
+            if (absolute.is_absolute())
+            {
+                globalRoot = absolute.root_path();
+                root = &globalRoot;
+            }
+        }
         if (!root)
             return "Ce sous-serveur n'a pas de " + a.value("source", std::string("vault")) + ".";
 
         if (call.name == "lire_note")
         {
-            const fs::path p = Confine(*root, a.value("chemin", ""));
+            const fs::path requested = fs::path(Platform::Widen(a.value("chemin", "")));
+            const fs::path p = source == "global" && requested.is_absolute() ? requested : Confine(*root, a.value("chemin", ""));
             std::error_code ec;
-            if (p.empty() || !fs::is_regular_file(p, ec) || !IsTextNote(p))
+            if (p.empty() || !ExclusionMode(src, *root, p).empty() || !fs::is_regular_file(p, ec) || !IsTextNote(p))
                 return "Note introuvable ou hors du périmètre : " + a.value("chemin", "");
             std::string text = ReadFileUtf8(p, 60000);
             if (text.size() == 60000)
@@ -389,7 +436,9 @@ namespace Tools
 
         if (call.name == "lister")
         {
-            const fs::path dir = a.value("dossier", "").empty() ? *root : Confine(*root, a.value("dossier", ""));
+            const fs::path requested = fs::path(Platform::Widen(a.value("dossier", "")));
+            const fs::path dir = source == "global" && requested.is_absolute() ? requested :
+                                 (a.value("dossier", "").empty() ? *root : Confine(*root, a.value("dossier", "")));
             std::error_code ec;
             if (dir.empty() || !fs::is_directory(dir, ec))
                 return "Dossier introuvable : " + a.value("dossier", "");
@@ -398,7 +447,8 @@ namespace Tools
             for (const auto& e : fs::directory_iterator(dir, ec))
             {
                 const fs::path rel = fs::relative(e.path(), *root, ec);
-                if (Hidden(rel) || (!e.is_directory() && !IsTextNote(e.path())))
+                if (ExclusionMode(src, *root, e.path()) == "cant_access" || Hidden(rel) ||
+                    (!e.is_directory() && !IsTextNote(e.path())))
                     continue;
                 out += (e.is_directory() ? "[dossier] " : "") + Platform::Narrow(rel.generic_wstring()) + "\n";
                 if (++n >= 200)
@@ -422,12 +472,15 @@ namespace Tools
                  it != fs::recursive_directory_iterator() && hits < 30 && files < 20000; it.increment(ec))
             {
                 const fs::path rel = fs::relative(it->path(), *root, ec);
-                if (Hidden(rel))
+                const std::string excluded = ExclusionMode(src, *root, it->path());
+                if (excluded == "cant_access" || Hidden(rel))
                 {
                     if (it->is_directory())
                         it.disable_recursion_pending();
                     continue;
                 }
+                if (excluded == "cant_read")
+                    continue;
                 if (!it->is_regular_file() || !IsTextNote(it->path()))
                     continue;
                 ++files;
