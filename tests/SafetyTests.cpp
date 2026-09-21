@@ -4,6 +4,7 @@
 
 #include "../src/Conductor.h"
 #include "../src/GitHub.h"
+#include "../src/ReleaseSignature.h"
 #include "../src/Platform.h"
 #include "../src/Settings.h"
 #include "../src/Store.h"
@@ -359,6 +360,41 @@ int main(int argc, char** argv)
         CHECK(issueReloaded.Load());
         CHECK(issueReloaded.Tasks("salon").size() == 1 && issueReloaded.Tasks("salon")[0].issueState == "CLOSED");
         fs::remove_all(issueRoot, issueEc);
+    }
+
+    // --- Signed updates: any change to the executable, version or key is rejected ---------------------
+    {
+        const fs::path sigRoot = fs::temp_directory_path() / "agentchats-signature-tests";
+        std::error_code sigEc;
+        fs::remove_all(sigRoot, sigEc);
+        fs::create_directories(sigRoot, sigEc);
+        const fs::path exe = sigRoot / "AgentChats.exe";
+        std::ofstream(exe, std::ios::binary) << "MZ fake executable for the signature test";
+        std::vector<unsigned char> priv, otherPriv;
+        std::string pub, otherPub;
+        CHECK(ReleaseSignature::GenerateKeyPair(priv, pub));
+        CHECK(ReleaseSignature::GenerateKeyPair(otherPriv, otherPub));
+        const std::string digest = ReleaseSignature::Sha256File(exe);
+        CHECK(digest.size() == 64);
+        const std::string sig = ReleaseSignature::Sign(priv, "v9.9.9", digest);
+        CHECK(!sig.empty());
+        CHECK(ReleaseSignature::Verify("v9.9.9", digest, sig, {pub}));                 // genuine
+        CHECK(ReleaseSignature::Verify("v9.9.9", digest, sig, {otherPub, pub}));       // key rotation list
+        CHECK(!ReleaseSignature::Verify("v9.9.8", digest, sig, {pub}));                // other version
+        CHECK(!ReleaseSignature::Verify("v9.9.9", digest, sig, {otherPub}));           // unknown key
+        CHECK(!ReleaseSignature::Verify("v9.9.9", digest, sig.substr(0, sig.size() / 2), {pub})); // truncated
+        CHECK(!ReleaseSignature::Verify("v9.9.9", digest, "", {pub}));                 // missing
+        CHECK(!ReleaseSignature::Verify("v9.9.9", digest, "pas du base64 !", {pub}));  // garbage
+        CHECK(!ReleaseSignature::Verify("v9.9.9", digest, sig, {}));                   // no trusted key
+        {
+            std::ofstream tamper(exe, std::ios::binary | std::ios::app);
+            tamper << "X"; // one extra byte
+        }
+        CHECK(!ReleaseSignature::Verify("v9.9.9", ReleaseSignature::Sha256File(exe), sig, {pub}));
+        CHECK(!ReleaseSignature::Verify("v9.9.9", "ZZ", sig, {pub}));                  // malformed digest
+        if (!ReleaseSignature::HasTrustedKeys())
+            CHECK(!ReleaseSignature::VerifyRelease("v9.9.9", digest, sig));             // nothing embedded yet
+        fs::remove_all(sigRoot, sigEc);
     }
     std::printf(g_failures == 0 ? "Tous les tests passent.\n" : "%d test(s) en échec.\n", g_failures);
     return g_failures == 0 ? 0 : 1;

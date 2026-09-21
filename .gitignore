@@ -19,3 +19,7 @@ subservers/
 *.pfx
 *.key
 secrets.json
+
+# Release signing key material (never in the repository)
+*.dpapi
+*.agkey

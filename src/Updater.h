@@ -24,6 +24,10 @@ public:
     bool SourceReady() const;
     const std::filesystem::path& SourcePath() const { return m_source; }
     static bool ApplyPendingUpdate(const std::filesystem::path& destination, unsigned long parentPid);
+    // The version replaced by the last update, kept next to the executable.
+    bool HasPrevious() const;
+    bool Rollback(void* hwnd);
+    static std::filesystem::path PreviousPath();
 
 private:
     void RunCheck(bool download);

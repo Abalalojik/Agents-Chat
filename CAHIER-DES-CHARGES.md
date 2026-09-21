@@ -24,6 +24,9 @@ sources de travail, et ne confond jamais abonnement grand public/professionnel e
    (`toi`, sous-serveur, salon) est respectée et sa provenance reste visible.
 5. **Actions sensibles approuvées.** Écriture de code, publication, banque et commandes système suivent
    une frontière d'autorisation explicite et sont journalisées.
+5 bis. **Mises à jour signées.** Une mise à jour automatique n'est installée que si elle est signée (ECDSA P-256)
+   par une clé de publication intégrée à l'application, pour sa version exacte ; la clé privée reste hors du dépôt.
+   La version remplacée est conservée pour un retour arrière. Procédure : `RELEASING.md`.
 6. **Linux est une cible produit obligatoire.** L'application ne doit pas enfermer l'utilisatrice sur Windows.
    Les formats sont multiplateformes et un build Linux ne sera déclaré disponible qu'après compilation et tests
    natifs, pas parce que le projet utilise CMake.

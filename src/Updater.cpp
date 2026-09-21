@@ -2,6 +2,7 @@
 #include "Http.h"
 #include "Platform.h"
 #include "Process.h"
+#include "ReleaseSignature.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -23,36 +24,6 @@ namespace
         const size_t first = s.find_first_not_of(" \t\r\n");
         const size_t last = s.find_last_not_of(" \t\r\n");
         return first == std::string::npos ? std::string() : s.substr(first, last - first + 1);
-    }
-
-    std::string Sha256(const fs::path& path)
-    {
-        BCRYPT_ALG_HANDLE algorithm = nullptr;
-        BCRYPT_HASH_HANDLE hash = nullptr;
-        DWORD objectSize = 0, bytes = 0, hashSize = 0;
-        std::string result;
-        if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) return {};
-        BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectSize), sizeof(objectSize), &bytes, 0);
-        BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashSize), sizeof(hashSize), &bytes, 0);
-        std::vector<unsigned char> object(objectSize), digest(hashSize);
-        if (BCryptCreateHash(algorithm, &hash, object.data(), objectSize, nullptr, 0, 0) == 0)
-        {
-            std::ifstream in(path, std::ios::binary);
-            std::vector<unsigned char> buffer(64 * 1024);
-            while (in)
-            {
-                in.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-                if (in.gcount() > 0) BCryptHashData(hash, buffer.data(), static_cast<ULONG>(in.gcount()), 0);
-            }
-            if (in.eof() && BCryptFinishHash(hash, digest.data(), hashSize, 0) == 0)
-            {
-                static constexpr char hex[] = "0123456789abcdef";
-                for (unsigned char b : digest) { result += hex[b >> 4]; result += hex[b & 15]; }
-            }
-        }
-        if (hash) BCryptDestroyHash(hash);
-        BCryptCloseAlgorithmProvider(algorithm, 0);
-        return result;
     }
 
     std::vector<int> VersionParts(std::string value)
@@ -172,12 +143,13 @@ void Updater::RunCheck(bool download)
             if (release.status != 200) throw std::runtime_error(release.error.empty() ? "GitHub répond " + std::to_string(release.status) : release.error);
             const json doc = json::parse(release.body);
             const std::string version = doc.value("tag_name", "");
-            std::string exeUrl, hashUrl;
+            std::string exeUrl, hashUrl, sigUrl;
             for (const json& asset : doc.value("assets", json::array()))
             {
                 const std::string name = asset.value("name", "");
                 if (name == "AgentChats.exe") exeUrl = asset.value("browser_download_url", "");
                 if (name == "AgentChats.exe.sha256") hashUrl = asset.value("browser_download_url", "");
+                if (name == "AgentChats.exe.sig") sigUrl = asset.value("browser_download_url", "");
             }
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
@@ -185,8 +157,11 @@ void Updater::RunCheck(bool download)
             }
             if (VersionParts(version) <= VersionParts(kAgentChatsVersion))
                 setStatus("Agents Chat est à jour (v" + std::string(kAgentChatsVersion) + ").");
-            else if (exeUrl.empty() || hashUrl.empty())
-                setStatus("Release " + version + " trouvée, mais elle ne contient pas l'exécutable signé par SHA-256.");
+            else if (exeUrl.empty() || sigUrl.empty())
+                setStatus("Release " + version + " trouvée, mais non signée : elle ne sera pas installée automatiquement.");
+            else if (!ReleaseSignature::HasTrustedKeys())
+                setStatus("Release " + version + " disponible, mais cette copie d'Agents Chat n'embarque aucune clé de "
+                          "signature : installe-la à la main une fois (voir RELEASING.md).");
             else if (!download)
                 setStatus("Mise à jour " + version + " disponible.");
             else
@@ -195,15 +170,14 @@ void Updater::RunCheck(bool download)
                 std::ofstream out(m_pending, std::ios::binary | std::ios::trunc);
                 const Http::Response binary = Http::Request("GET", exeUrl, {}, "", [&](const std::string& chunk) { out.write(chunk.data(), static_cast<std::streamsize>(chunk.size())); }, cancel);
                 out.close();
-                const Http::Response expected = Http::Request("GET", hashUrl, {}, "", {}, cancel);
-                std::string wanted = Trim(expected.body);
-                const size_t separator = wanted.find_first_of(" \t");
-                if (separator != std::string::npos) wanted.resize(separator);
-                std::transform(wanted.begin(), wanted.end(), wanted.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (binary.status < 200 || binary.status >= 300 || expected.status != 200 || wanted.size() != 64 || Sha256(m_pending) != wanted)
+                // Trust comes from the signature by an embedded key, never from the release itself.
+                const Http::Response signature = Http::Request("GET", sigUrl, {}, "", {}, cancel);
+                const std::string digest = ReleaseSignature::Sha256File(m_pending);
+                if (binary.status < 200 || binary.status >= 300 || signature.status != 200 || digest.empty() ||
+                    !ReleaseSignature::VerifyRelease(version, digest, Trim(signature.body)))
                 {
                     std::error_code ec; fs::remove(m_pending, ec);
-                    throw std::runtime_error("le téléchargement ou sa vérification SHA-256 a échoué");
+                    throw std::runtime_error("signature absente ou invalide : la mise à jour " + version + " a été rejetée");
                 }
                 { std::lock_guard<std::mutex> lock(m_mutex); m_ready = true; }
                 setStatus("Mise à jour " + version + " vérifiée et prête à installer.");
@@ -233,12 +207,44 @@ bool Updater::Apply(void* hwnd)
     return true;
 }
 
+fs::path Updater::PreviousPath()
+{
+    wchar_t current[32768];
+    const DWORD n = GetModuleFileNameW(nullptr, current, static_cast<DWORD>(std::size(current)));
+    if (!n || n >= std::size(current)) return {};
+    return fs::path(std::wstring(current, n)).parent_path() / L"AgentChats.previous.exe";
+}
+
+bool Updater::HasPrevious() const
+{
+    std::error_code ec;
+    const fs::path previous = PreviousPath();
+    return !previous.empty() && fs::exists(previous, ec);
+}
+
+bool Updater::Rollback(void* hwnd)
+{
+    // Stage the kept version exactly like a downloaded one, then use the normal swap.
+    const fs::path previous = PreviousPath();
+    std::error_code ec;
+    if (previous.empty() || !fs::exists(previous, ec) || m_busy) return false;
+    fs::create_directories(m_root, ec);
+    if (!fs::copy_file(previous, m_pending, fs::copy_options::overwrite_existing, ec)) return false;
+    { std::lock_guard<std::mutex> lock(m_mutex); m_ready = true; m_version = "précédente"; }
+    return Apply(hwnd);
+}
+
 bool Updater::ApplyPendingUpdate(const fs::path& destination, unsigned long parentPid)
 {
     if (HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, parentPid)) { WaitForSingleObject(process, 30000); CloseHandle(process); }
     wchar_t self[32768];
     const DWORD n = GetModuleFileNameW(nullptr, self, static_cast<DWORD>(std::size(self)));
-    if (!n || !CopyFileW(self, destination.c_str(), FALSE)) return false;
+    if (!n) return false;
+    // Keep the version being replaced, for "Revenir à la version précédente".
+    const fs::path previous = destination.parent_path() / L"AgentChats.previous.exe";
+    if (_wcsicmp(fs::path(self).filename().c_str(), previous.filename().c_str()) != 0)
+        CopyFileW(destination.c_str(), previous.c_str(), FALSE);
+    if (!CopyFileW(self, destination.c_str(), FALSE)) return false;
     ShellExecuteW(nullptr, L"open", destination.c_str(), nullptr, destination.parent_path().c_str(), SW_SHOWNORMAL);
     MoveFileExW(self, nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
     return true;

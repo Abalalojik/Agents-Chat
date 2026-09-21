@@ -2973,8 +2973,9 @@ void App::DrawOptionsWindow()
 void App::DrawUpdatesTab()
 {
     ImGui::Text("Version installée : %s", kAgentChatsVersion);
-    ImGui::TextWrapped("Les mises à jour proviennent des releases de Abalalojik/Agents-Chat. "
-                       "L'exécutable est refusé si son empreinte SHA-256 publiée ne correspond pas.");
+    ImGui::TextWrapped("Les mises à jour proviennent des releases de Abalalojik/Agents-Chat. Une mise à jour n'est "
+                       "installée que si elle est signée par la clé de publication intégrée à cette copie, pour cette "
+                       "version précise : un compte GitHub compromis ne suffit pas à en faire installer une fausse.");
     ImGui::Spacing();
     bool automatic = m_settings.AutoUpdate();
     if (ImGui::Checkbox("Rechercher et télécharger automatiquement au démarrage", &automatic))
@@ -2992,6 +2993,14 @@ void App::DrawUpdatesTab()
         if (ImGui::Button("Installer et relancer Agents Chat") && !m_updater.Apply(m_hwnd))
             m_store.SetError("Impossible de lancer l'installation de la mise à jour.");
         ImGui::PopStyleColor();
+    }
+    if (m_updater.HasPrevious())
+    {
+        ImGui::BeginDisabled(m_updater.Busy());
+        if (ImGui::Button("Revenir à la version précédente") && !m_updater.Rollback(m_hwnd))
+            m_store.SetError("Impossible de revenir à la version précédente.");
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("La version remplacée par la dernière mise à jour est gardée à côté de l'exécutable.");
     }
     ImGui::Spacing();
     ImGui::SeparatorText("Auto-amélioration");

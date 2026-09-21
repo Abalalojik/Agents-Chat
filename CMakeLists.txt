@@ -55,7 +55,8 @@ add_executable(AgentChats WIN32
   src/Tools.cpp
   src/Conductor.cpp
   src/CodeWorker.cpp
-  src/GitHub.cpp)
+  src/GitHub.cpp
+  src/ReleaseSignature.cpp)
 
 target_link_libraries(AgentChats PRIVATE
   imgui
@@ -80,13 +81,21 @@ add_executable(AgentChatsTests
   src/CloudSync.cpp
   src/ModelCatalog.cpp
   src/Store.cpp
-  src/GitHub.cpp)
-target_link_libraries(AgentChatsTests PRIVATE nlohmann_json::nlohmann_json ole32 shell32 uuid winhttp crypt32 ws2_32)
+  src/GitHub.cpp
+  src/ReleaseSignature.cpp)
+target_link_libraries(AgentChatsTests PRIVATE nlohmann_json::nlohmann_json ole32 shell32 uuid winhttp crypt32 ws2_32 bcrypt)
 target_compile_definitions(AgentChatsTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(AgentChatsTests PRIVATE /utf-8 /W4 /permissive-)
 
 enable_testing()
 add_test(NAME AgentChatsSafety COMMAND AgentChatsTests)
+
+# --- Release signing tool (maintainer only, never shipped) ---------------------------------
+add_executable(AgentChatsRelease tools/ReleaseTool.cpp src/ReleaseSignature.cpp src/Secrets.cpp src/Platform.cpp)
+target_include_directories(AgentChatsRelease PRIVATE src)
+target_link_libraries(AgentChatsRelease PRIVATE bcrypt crypt32 ole32 shell32 uuid)
+target_compile_definitions(AgentChatsRelease PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(AgentChatsRelease PRIVATE /utf-8 /W4 /permissive-)
 
 install(TARGETS AgentChats RUNTIME DESTINATION .)
 install(FILES README.md LICENSE CAHIER-DES-CHARGES.md PORTABILITY.md DESTINATION documentation)
