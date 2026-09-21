@@ -81,8 +81,9 @@ Code, les IA modifient le code (écritures et agents de code approuvés), puis l
 - Le dépôt est déterminé depuis `remote.origin.url` du dossier de code, jamais depuis un jeton enregistré
   dans le workspace.
 - L'interface ouvre la liste des issues et la création d'une issue dans le navigateur.
-- Cible suivante : synchronisation bidirectionnelle via `gh` authentifié, avec numéro d'issue stocké dans
-  la tâche, import des labels/états, commentaires proposés avant envoi et fermeture seulement après test.
+- Fait : synchronisation via `gh` authentifié (aucun jeton stocké) : numéro d'issue stocké dans la tâche,
+  import des états, création et commentaires proposés par les IA puis envoyés après accord, fermeture seulement
+  après la case « tests vérifiés » cochée par l'utilisatrice.
 - Une issue distante ne doit jamais être fermée automatiquement sur la seule affirmation d'une IA.
 
 ## 7. Mémoire et contexte économique
