@@ -48,6 +48,13 @@ d'agendas et de banque restent eux aussi locaux et chiffrés.
 Ne publiez jamais le contenu du dossier `%LOCALAPPDATA%\AgentChats\`. Les fichiers de
 configuration locale, caches, journaux, clés et certificats sont volontairement ignorés.
 
+## Licence
+
+Agents Chat est distribué sous la licence
+[GNU Affero General Public License v3.0](LICENSE). Les versions modifiées distribuées
+ou proposées aux utilisateurs au travers d'un réseau doivent conserver cette licence
+et mettre leur code source correspondant à disposition.
+
 Si `cmake` n'est pas dans le PATH, celui de Visual Studio est ici :
 `C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`
 
