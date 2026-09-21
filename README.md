@@ -13,13 +13,20 @@ jongler entre trois applications, en utilisant leurs points d'accès officiels d
 - Salons Analyse, Détente, Consolidation lore, Code et Bugs GitHub.
 - Fil de messages et saisie (Entrée envoie, Ctrl+Entrée va à la ligne).
 - Transcript en ajout seul, un par salon.
-- Boîte aux lettres (vide pour l'instant) et liste des membres.
+- Boîte aux lettres : questions des IA, écritures de fichiers (avant/après), corrections du vault ou du lore,
+  travaux de code, autorisations ponctuelles, demandes de compétences, actions GitHub et auto-amélioration.
+  Rien de tout cela n'est exécuté sans ton accord.
+- Liste des membres avec leur statut réel.
 - Mémoire réellement commune : les faits sont visibles par toute l'équipe selon
   leur portée et les doublons équivalents sont fusionnés, même entre IA.
-- Sous-serveur intégré « Amélioration d’Agents Chat » avec un salon de retours et
-  un salon Code relié automatiquement aux sources de l'application.
+- Sous-serveur intégré « Amélioration d’Agents Chat » : les IA de son salon Code modifient l'application,
+  la compilent et lancent ses tests, puis proposent de l'installer (seulement si les tests passent,
+  avec retour arrière) ou d'ouvrir une pull request.
 - Todo transversale par personne, réaffectation/statut, et PM local dédié avec chaque IA.
-- Les salons Bugs GitHub ouvrent les issues du dépôt configuré sans stocker de jeton GitHub.
+- Salons Bugs GitHub synchronisés avec les issues via `gh` (déjà connecté, aucun jeton stocké) :
+  import en tâches « #N », création, commentaire, et fermeture seulement après ta vérification des tests.
+- Mises à jour signées : une release n'est installée automatiquement que si elle est signée par la clé
+  de publication intégrée ; la version remplacée est gardée. Voir [RELEASING.md](RELEASING.md).
 - Langue et niveau de modèle (Léger / Normal / Fort) par salon ; niveau réglable par IA
   dans « Membres ».
 - Options → Modèles : pour chaque IA et chaque niveau, le modèle et le niveau de réflexion.
@@ -46,6 +53,12 @@ cmake --build build --config Release
 ```
 
 L'exécutable est `build\Release\AgentChats.exe`.
+
+Tests de sécurité (confinement des chemins, zones vault/lore, outils, signatures, GitHub) :
+
+```powershell
+build\Release\AgentChatsTests.exe
+```
 
 Le port Linux n'est pas encore compilable : le noyau métier est largement réutilisable,
 mais l'hôte graphique et plusieurs services système sont Windows. Voir [PORTABILITY.md](PORTABILITY.md).
@@ -87,8 +100,21 @@ avant de la lancer.
 
 | Fichier | Rôle |
 |---|---|
-| `src/main.cpp` | Fenêtre Win32, DirectX 11, boucle d'affichage |
-| `src/App.cpp` | Toute l'interface (colonnes, fil, fenêtres de création) |
-| `src/Store.cpp` | Lecture/écriture de `workspace.json` et des transcripts |
-| `src/Model.h` | Types de données : sous-serveur, salon, message, demande |
-| `src/Platform.cpp` | Outils Windows : chemins, dates, sélecteur de dossier |
+| `src/main.cpp` | Fenêtre Win32, DirectX 11, boucle d'affichage, application d'une mise à jour |
+| `src/App.cpp` | Toute l'interface : colonnes, fil, boîte aux lettres, Options, actions des IA |
+| `src/OptionsModules.cpp` | Liste des pages d'Options (mises à jour, connexions, modèles, mémoire, connecteurs, plugins, MCPs) |
+| `src/Store.cpp` | `workspace.json`, transcripts, mémoire commune, tâches, boîte aux lettres |
+| `src/Settings.cpp` | Modèles par niveau, présence, préférences |
+| `src/Model.h` | Types de données : sous-serveur, salon, message, demande, tâche |
+| `src/Conductor.cpp` | Tour de parole des IA, rôles, outils en texte |
+| `src/Backends.cpp` | Appels aux CLI officielles (Claude Code, Codex, Gemini/Antigravity) et aux API |
+| `src/CodeWorker.cpp` | Agents de code lancés dans le dossier du projet |
+| `src/Tools.cpp` | Outils des IA, confinement des chemins, zones vault/lore |
+| `src/ModelCatalog.cpp` | Catalogue des modèles et niveaux de réflexion |
+| `src/GitHub.cpp` | Issues et pull requests via `gh` |
+| `src/Updater.cpp` | Mises à jour signées, compilation locale testée, retour arrière |
+| `src/ReleaseSignature.cpp`, `src/UpdateKeys.h` | Vérification ECDSA P-256 des releases, clés de confiance |
+| `src/CloudSync.cpp` | Mail, agenda et banque en lecture seule, caches locaux |
+| `src/Process.cpp`, `src/Http.cpp`, `src/Secrets.cpp`, `src/Platform.cpp` | Processus (job objects), WinHTTP, DPAPI, services Windows |
+| `tests/SafetyTests.cpp` | Tests automatisés et diagnostics (`--connections`, `--github-read`, `--self-build`) |
+| `tools/ReleaseTool.cpp` | Outil de la mainteneuse : clé de publication, signature, sauvegarde (jamais livré) |
