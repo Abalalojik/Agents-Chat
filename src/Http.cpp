@@ -1,13 +1,18 @@
 #include "Http.h"
 #include "Platform.h"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <winhttp.h>
+#else
+#include <curl/curl.h>
+#endif
 
 #include <algorithm>
 
 namespace Http
 {
+#ifdef _WIN32
     namespace
     {
         struct Handle
@@ -156,6 +161,125 @@ namespace Http
         }
         return resp;
     }
+#else
+    // ---------------------------------------------------------------- libcurl (Linux)
+    namespace
+    {
+        std::string Lower(std::string s)
+        {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        }
+
+        struct Transfer
+        {
+            CURL* curl = nullptr;
+            Response* resp = nullptr;
+            const std::function<void(const std::string&)>* onData = nullptr;
+            const std::atomic<bool>* cancel = nullptr;
+            bool truncated = false;
+        };
+
+        size_t OnHeader(char* data, size_t size, size_t count, void* user)
+        {
+            auto* t = static_cast<Transfer*>(user);
+            const std::string line(data, size * count);
+            if (line.rfind("HTTP/", 0) == 0)
+                t->resp->headers.clear(); // a new response (after a redirect)
+            const size_t colon = line.find(':');
+            if (colon != std::string::npos)
+            {
+                std::string value = line.substr(colon + 1);
+                value.erase(0, value.find_first_not_of(' '));
+                while (!value.empty() && (value.back() == '\r' || value.back() == '\n'))
+                    value.pop_back();
+                t->resp->headers[Lower(line.substr(0, colon))] = value;
+            }
+            return size * count;
+        }
+
+        size_t OnBody(char* data, size_t size, size_t count, void* user)
+        {
+            auto* t = static_cast<Transfer*>(user);
+            const size_t n = size * count;
+            long status = 0;
+            curl_easy_getinfo(t->curl, CURLINFO_RESPONSE_CODE, &status);
+            // Errors are read whole so the caller can explain them; success streams.
+            if (*t->onData && status >= 200 && status < 300)
+            {
+                (*t->onData)(std::string(data, n));
+                return n;
+            }
+            constexpr size_t kMaxErrorBody = 2 * 1024 * 1024;
+            const size_t room = t->resp->body.size() < kMaxErrorBody ? kMaxErrorBody - t->resp->body.size() : 0;
+            t->resp->body.append(data, std::min(room, n));
+            if (n > room)
+            {
+                t->resp->body += "\n[…réponse tronquée à 2 Mio]";
+                t->truncated = true;
+                return 0; // stops the transfer
+            }
+            return n;
+        }
+
+        int OnProgress(void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+        {
+            return static_cast<Transfer*>(user)->cancel->load() ? 1 : 0;
+        }
+    }
+
+    Response Request(const std::string& method, const std::string& url, const Headers& headers,
+                     const std::string& body, const std::function<void(const std::string& chunk)>& onData,
+                     const std::atomic<bool>& cancel)
+    {
+        static const bool initialised = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK;
+        Response resp;
+        CURL* curl = initialised ? curl_easy_init() : nullptr;
+        if (!curl)
+        {
+            resp.error = "libcurl indisponible";
+            return resp;
+        }
+        Transfer t{curl, &resp, &onData, &cancel};
+        curl_slist* list = nullptr;
+        for (const auto& [name, value] : headers)
+            list = curl_slist_append(list, (name + ": " + value).c_str());
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
+        if (method != "GET" || !body.empty())
+        {
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.data());
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(body.size()));
+        }
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, list);
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "AgentChats/1.0");
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 180L);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, OnHeader);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &t);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, OnBody);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &t);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, OnProgress);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &t);
+
+        const CURLcode code = curl_easy_perform(curl);
+        long status = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+        resp.status = static_cast<int>(status);
+        if (code == CURLE_ABORTED_BY_CALLBACK)
+            resp.error = "annulé";
+        else if (code != CURLE_OK && !(code == CURLE_WRITE_ERROR && t.truncated) && resp.status == 0)
+            resp.error = std::string("échec réseau : ") + curl_easy_strerror(code);
+        curl_slist_free_all(list);
+        curl_easy_cleanup(curl);
+        return resp;
+    }
+#endif
 
     void SseParser::Feed(const std::string& chunk)
     {

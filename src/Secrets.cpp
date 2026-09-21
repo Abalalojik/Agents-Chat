@@ -1,13 +1,19 @@
 #include "Secrets.h"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <dpapi.h>
 #include <wincrypt.h>
+#else
+#include "Platform.h"
+#include <libsecret/secret.h>
+#endif
 
 #include <vector>
 
 namespace Secrets
 {
+#ifdef _WIN32
     std::string Protect(const std::string& plain)
     {
         DATA_BLOB in{static_cast<DWORD>(plain.size()), reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()))};
@@ -41,4 +47,46 @@ namespace Secrets
         LocalFree(out.pbData);
         return plain;
     }
+#else
+    // Linux: the desktop keyring (Secret Service, via libsecret). The stored value is only a
+    // reference; DPAPI blobs from Windows cannot be read here and must be entered again.
+    namespace
+    {
+        const SecretSchema* Schema()
+        {
+            static const SecretSchema schema = {"com.agentschat.Secret", SECRET_SCHEMA_NONE,
+                                                {{"id", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}},
+                                                0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+            return &schema;
+        }
+        constexpr const char* kPrefix = "secret-service:";
+    }
+
+    std::string Protect(const std::string& plain)
+    {
+        const std::string id = Platform::NewId();
+        GError* error = nullptr;
+        const gboolean ok = secret_password_store_sync(Schema(), SECRET_COLLECTION_DEFAULT, "Agents Chat", plain.c_str(),
+                                                       nullptr, &error, "id", id.c_str(), nullptr);
+        if (error)
+            g_error_free(error);
+        return ok ? kPrefix + id : std::string();
+    }
+
+    std::string Unprotect(const std::string& reference)
+    {
+        if (reference.rfind(kPrefix, 0) != 0)
+            return {};
+        const std::string id = reference.substr(std::string(kPrefix).size());
+        GError* error = nullptr;
+        gchar* value = secret_password_lookup_sync(Schema(), nullptr, &error, "id", id.c_str(), nullptr);
+        if (error)
+            g_error_free(error);
+        if (!value)
+            return {};
+        std::string plain(value);
+        secret_password_free(value);
+        return plain;
+    }
+#endif
 }

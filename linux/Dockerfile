@@ -5,7 +5,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential g++ cmake ninja-build git pkg-config ca-certificates curl xz-utils \
-        libcurl4-openssl-dev libsecret-1-dev libsdl2-dev libgl-dev \
+        libcurl4-openssl-dev libssl-dev libsecret-1-dev libsdl2-dev libgl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Same pinned third-party versions as CMakeLists.txt (FetchContent).

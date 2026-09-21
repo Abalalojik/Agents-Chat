@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-// Minimal HTTPS client on WinHTTP. Bodies are streamed to a callback so
+// Minimal HTTPS client (WinHTTP on Windows, libcurl on Linux). Bodies are streamed to a callback so
 // server-sent events (token streaming) reach the UI as they arrive.
 namespace Http
 {

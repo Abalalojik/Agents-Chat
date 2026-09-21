@@ -33,6 +33,8 @@ namespace Process
 
     // Hard ceiling for everything the app launches (the process and its children
     // together). Beyond it Windows refuses allocations and the job is ended.
+    // Not enforced on Linux yet (RLIMIT_AS breaks V8/Node CLIs; a cgroup is the planned way);
+    // there a cancel or a timeout kills the whole process group.
     inline constexpr size_t kJobMemoryLimit = 3ull * 1024 * 1024 * 1024;
 
     // Full path of an executable found on PATH ("" if none).

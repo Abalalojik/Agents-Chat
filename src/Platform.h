@@ -2,7 +2,7 @@
 #include <filesystem>
 #include <string>
 
-// Small Windows helpers. All strings crossing this API are UTF-8.
+// Small platform helpers (Windows and POSIX). All strings crossing this API are UTF-8.
 namespace Platform
 {
     std::wstring Widen(const std::string& utf8);
@@ -12,7 +12,8 @@ namespace Platform
     // replaces the destination (including when it already exists).
     bool WriteFileAtomic(const std::filesystem::path& file, const std::string& text, std::string& error);
 
-    // %LOCALAPPDATA%\AgentChats (or %AGENTCHATS_DATA% when set), created if missing.
+    // %LOCALAPPDATA%\AgentChats on Windows, $XDG_DATA_HOME/AgentChats (~/.local/share) on Linux,
+    // or $AGENTCHATS_DATA when set; created if missing.
     std::filesystem::path DataRoot();
 
     // Locates the AgentChats source root from the running executable/build tree.

@@ -1,8 +1,13 @@
 #include "Platform.h"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#else
+#include <unistd.h>
+#include <cstdlib>
+#endif
 
 #include <cstdio>
 #include <ctime>
@@ -11,6 +16,7 @@
 
 namespace Platform
 {
+#ifdef _WIN32
     std::wstring Widen(const std::string& utf8)
     {
         if (utf8.empty())
@@ -190,4 +196,204 @@ namespace Platform
         dialog->Release();
         return result;
     }
+#else
+    // POSIX: wchar_t is UTF-32; conversions are done by hand, independent of the C locale.
+    std::wstring Widen(const std::string& utf8)
+    {
+        std::wstring out;
+        out.reserve(utf8.size());
+        for (size_t i = 0; i < utf8.size();)
+        {
+            const unsigned char c = static_cast<unsigned char>(utf8[i]);
+            unsigned code = 0xFFFD;
+            size_t extra = 0;
+            if (c < 0x80) { code = c; }
+            else if ((c & 0xE0) == 0xC0) { code = c & 0x1F; extra = 1; }
+            else if ((c & 0xF0) == 0xE0) { code = c & 0x0F; extra = 2; }
+            else if ((c & 0xF8) == 0xF0) { code = c & 0x07; extra = 3; }
+            ++i;
+            for (size_t k = 0; k < extra; ++k, ++i)
+            {
+                if (i >= utf8.size() || (static_cast<unsigned char>(utf8[i]) & 0xC0) != 0x80)
+                {
+                    code = 0xFFFD;
+                    break;
+                }
+                code = (code << 6) | (static_cast<unsigned char>(utf8[i]) & 0x3F);
+            }
+            out.push_back(static_cast<wchar_t>(code));
+        }
+        return out;
+    }
+
+    std::string Narrow(const std::wstring& wide)
+    {
+        std::string out;
+        out.reserve(wide.size());
+        for (wchar_t w : wide)
+        {
+            const unsigned code = static_cast<unsigned>(w);
+            if (code < 0x80)
+                out.push_back(static_cast<char>(code));
+            else if (code < 0x800)
+            {
+                out.push_back(static_cast<char>(0xC0 | (code >> 6)));
+                out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+            }
+            else if (code < 0x10000)
+            {
+                out.push_back(static_cast<char>(0xE0 | (code >> 12)));
+                out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+            }
+            else
+            {
+                out.push_back(static_cast<char>(0xF0 | (code >> 18)));
+                out.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+                out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+            }
+        }
+        return out;
+    }
+
+    bool WriteFileAtomic(const std::filesystem::path& file, const std::string& text, std::string& error)
+    {
+        error.clear();
+        std::filesystem::path tmp = file;
+        tmp += ".tmp";
+        {
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            out.write(text.data(), static_cast<std::streamsize>(text.size()));
+            out.flush();
+            if (!out)
+            {
+                error = "écriture du fichier temporaire impossible";
+                return false;
+            }
+        }
+        // rename(2) atomically replaces an existing destination on POSIX.
+        std::error_code ec;
+        std::filesystem::rename(tmp, file, ec);
+        if (ec)
+        {
+            std::filesystem::remove(tmp, ec);
+            error = "remplacement impossible : " + ec.message();
+            return false;
+        }
+        return true;
+    }
+
+    std::filesystem::path DataRoot()
+    {
+        std::filesystem::path root;
+        if (const char* overrideDir = std::getenv("AGENTCHATS_DATA"); overrideDir && *overrideDir)
+            root = overrideDir;
+        else if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
+            root = std::filesystem::path(xdg) / "AgentChats";
+        else if (const char* home = std::getenv("HOME"); home && *home)
+            root = std::filesystem::path(home) / ".local" / "share" / "AgentChats";
+        else
+            root = std::filesystem::current_path() / "AgentChatsData";
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        return root;
+    }
+
+    std::filesystem::path ProjectRoot()
+    {
+        std::error_code ec;
+        std::filesystem::path candidate = std::filesystem::read_symlink("/proc/self/exe", ec).parent_path();
+        for (int depth = 0; depth < 6 && !candidate.empty(); ++depth)
+        {
+            if (std::filesystem::is_regular_file(candidate / "CMakeLists.txt", ec) &&
+                std::filesystem::is_regular_file(candidate / "src" / "App.cpp", ec))
+                return std::filesystem::weakly_canonical(candidate, ec);
+            const auto parent = candidate.parent_path();
+            if (parent == candidate)
+                break;
+            candidate = parent;
+        }
+        return {};
+    }
+
+    std::string NewId()
+    {
+        static std::mt19937_64 rng{std::random_device{}()};
+        char buf[17];
+        std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(rng()));
+        return buf;
+    }
+
+    std::string NowIsoUtc()
+    {
+        const std::time_t now = std::time(nullptr);
+        std::tm utc{};
+        gmtime_r(&now, &utc);
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &utc);
+        return buf;
+    }
+
+    namespace
+    {
+        bool ParseIsoUtc(const std::string& isoUtc, std::time_t& out)
+        {
+            std::tm utc{};
+            if (std::sscanf(isoUtc.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d", &utc.tm_year, &utc.tm_mon, &utc.tm_mday,
+                            &utc.tm_hour, &utc.tm_min, &utc.tm_sec) != 6)
+                return false;
+            utc.tm_year -= 1900;
+            utc.tm_mon -= 1;
+            out = timegm(&utc);
+            return out != -1;
+        }
+    }
+
+    std::string LocalTimeOfDay(const std::string& isoUtc)
+    {
+        std::time_t t = 0;
+        std::tm local{};
+        if (!ParseIsoUtc(isoUtc, t) || !localtime_r(&t, &local))
+            return {};
+        char buf[8];
+        std::strftime(buf, sizeof(buf), "%H:%M", &local);
+        return buf;
+    }
+
+    std::string LocalWhen(const std::string& isoUtc)
+    {
+        std::time_t t = 0;
+        const std::time_t now = std::time(nullptr);
+        std::tm local{}, today{};
+        if (!ParseIsoUtc(isoUtc, t) || !localtime_r(&t, &local) || !localtime_r(&now, &today))
+            return {};
+        const bool sameDay = local.tm_year == today.tm_year && local.tm_yday == today.tm_yday;
+        char buf[16];
+        std::strftime(buf, sizeof(buf), sameDay ? "%H:%M" : "%d/%m %H:%M", &local);
+        return buf;
+    }
+
+    std::string PickFolder(void*, const wchar_t* title)
+    {
+        // zenity when present (GNOME and most desktops); otherwise the caller keeps its text field.
+        if (std::system("command -v zenity >/dev/null 2>&1") != 0)
+            return {};
+        std::string safeTitle;
+        for (char c : Narrow(title ? title : L""))
+            if (c != '\'' && c != '\\')
+                safeTitle.push_back(c);
+        FILE* pipe = popen(("zenity --file-selection --directory --title='" + safeTitle + "' 2>/dev/null").c_str(), "r");
+        if (!pipe)
+            return {};
+        std::string result;
+        char buf[4096];
+        while (std::fgets(buf, sizeof(buf), pipe))
+            result += buf;
+        pclose(pipe);
+        while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
+            result.pop_back();
+        return result;
+    }
+#endif
 }

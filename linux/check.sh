@@ -8,7 +8,7 @@ OUT=/tmp/linux-check
 mkdir -p "$OUT"
 
 FLAGS="-std=c++20 -fsyntax-only -Wall -Wextra -I$SRC/src -I/deps/imgui -I/deps/imgui/backends -I/deps/imgui/misc/cpp \
--I/deps/nlohmann_json/include -DAGENTCHATS_VERSION=\"linux-check\""
+-I/deps/nlohmann_json/include $(pkg-config --cflags libsecret-1) -DAGENTCHATS_VERSION=\"linux-check\""
 
 pass=0
 fail=0
