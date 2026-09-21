@@ -87,8 +87,33 @@ if(WIN32)
   target_compile_options(AgentChats PRIVATE ${AGENTCHATS_WARNINGS})
   install(TARGETS AgentChats RUNTIME DESTINATION .)
 else()
-  # The Linux window host (SDL2 + OpenGL) is not written yet: tests and logic build first.
-  message(STATUS "Linux : interface pas encore portée ; seuls les tests sont construits.")
+  # Linux window host: SDL2 + OpenGL 3.
+  find_package(SDL2 REQUIRED)
+  find_package(OpenGL REQUIRED)
+  add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+    ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp)
+  target_include_directories(imgui PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+    ${imgui_SOURCE_DIR}/misc/cpp)
+  target_link_libraries(imgui PUBLIC SDL2::SDL2 OpenGL::GL ${CMAKE_DL_LIBS})
+
+  add_executable(AgentChats
+    src/main_linux.cpp
+    src/App.cpp
+    src/OptionsModules.cpp
+    ${AGENTCHATS_CORE_SOURCES})
+  target_link_libraries(AgentChats PRIVATE imgui nlohmann_json::nlohmann_json ${AGENTCHATS_PLATFORM_LIBS})
+  target_compile_definitions(AgentChats PRIVATE AGENTCHATS_VERSION="${AGENTCHATS_VERSION}")
+  target_compile_options(AgentChats PRIVATE ${AGENTCHATS_WARNINGS})
+  install(TARGETS AgentChats RUNTIME DESTINATION bin)
 endif()
 
 # --- Safety tests (path confinement, zones, mentions, tool parsing) ---------------------------

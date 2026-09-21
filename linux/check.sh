@@ -8,7 +8,7 @@ OUT=/tmp/linux-check
 mkdir -p "$OUT"
 
 FLAGS="-std=c++20 -fsyntax-only -Wall -Wextra -I$SRC/src -I/deps/imgui -I/deps/imgui/backends -I/deps/imgui/misc/cpp \
--I/deps/nlohmann_json/include $(pkg-config --cflags libsecret-1) -DAGENTCHATS_VERSION=\"linux-check\""
+-I/deps/nlohmann_json/include $(pkg-config --cflags libsecret-1 sdl2) -DAGENTCHATS_VERSION=\"linux-check\""
 
 pass=0
 fail=0
@@ -16,6 +16,9 @@ printf '%-32s %s\n' "FICHIER" "RÉSULTAT"
 for file in "$SRC"/src/*.cpp "$SRC"/tests/*.cpp "$SRC"/tools/*.cpp; do
     [ -f "$file" ] || continue
     name=${file#"$SRC"/}
+    case "$name" in
+        src/main.cpp|tools/ReleaseTool.cpp) continue ;; # Windows-only by design (Win32 host, DPAPI key tool)
+    esac
     log="$OUT/$(echo "$name" | tr '/' '_').log"
     if g++ $FLAGS "$file" >"$log" 2>&1; then
         printf '%-32s OK\n' "$name"

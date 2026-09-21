@@ -10,8 +10,9 @@
 #include <imgui.h>
 #include <imgui_stdlib.h>
 #include <nlohmann/json.hpp>
+#ifdef _WIN32
 #include <windows.h>
-#include <shellapi.h>
+#endif
 
 #include <algorithm>
 #include <filesystem>
@@ -1308,7 +1309,7 @@ void App::ApplyCorrection(const InboxItem& item)
     const std::string zone = target.empty() ? "" : Tools::ZoneOf(target, Platform::Widen(sub->vaultPath), Platform::Widen(sub->lorePath));
     const bool zoneAllowed = ch && ((zone == "lore" && ch->type == ChannelType::ConsolidationLore) ||
                                     (zone == "vault" && ch->type == ChannelType::Analyse));
-    if (target.empty() || _wcsicmp(ext.c_str(), L".md") != 0)
+    if (target.empty() || (ext != L".md" && ext != L".MD" && ext != L".Md" && ext != L".mD"))
         outcome = "Chemin refusé (hors du périmètre ou pas une note .md) : " + relative;
     else if (!zoneAllowed)
         outcome = "Refusé : « " + relative + " » est dans le " + (zone.empty() ? "?" : zone) +
@@ -1724,7 +1725,7 @@ void App::DrawTaskBoard(Channel& channel)
             ImGui::SameLine();
             const std::string badge = "#" + std::to_string(t.issueNumber) + (t.issueState == "CLOSED" ? " fermée" : "");
             if (ImGui::SmallButton(badge.c_str()) && !t.issueUrl.empty())
-                ShellExecuteW(nullptr, L"open", Platform::Widen(t.issueUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                Platform::OpenUrl(t.issueUrl);
             ImGui::SetItemTooltip("Ouvrir l'issue sur GitHub");
         }
         if (ImGui::BeginPopupContextItem("##task"))
@@ -3664,7 +3665,7 @@ void App::DrawChatOptionsWindow()
                 if (repo.empty())
                     m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
                 else
-                    ShellExecuteW(nullptr, L"open", Platform::Widen(repo + "/issues").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    Platform::OpenUrl(repo + "/issues");
             }
             ImGui::SameLine();
             if (ImGui::Button("Nouveau bug"))
@@ -3673,7 +3674,7 @@ void App::DrawChatOptionsWindow()
                 if (repo.empty())
                     m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
                 else
-                    ShellExecuteW(nullptr, L"open", Platform::Widen(repo + "/issues/new").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    Platform::OpenUrl(repo + "/issues/new");
             }
         }
         DrawTaskBoard(*channel);
@@ -3874,9 +3875,48 @@ void App::DrawCloudTab()
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextUnformatted("Synchronisation locale automatique");
+#ifdef _WIN32
     ImGui::TextWrapped("Le Planificateur de tâches Windows lance Agents Chat silencieusement toutes les 15 minutes. "
                        "Il met uniquement les caches à jour : aucun modèle d'IA, aucun token et aucun cron facturé.");
+#else
+    ImGui::TextWrapped("Un timer systemd utilisateur lance Agents Chat silencieusement toutes les 15 minutes. "
+                       "Il met uniquement les caches à jour : aucun modèle d'IA, aucun token et aucun cron facturé.");
+#endif
     auto schedulerCommand = [&](bool remove) {
+#ifndef _WIN32
+        // Linux: ~/.config/systemd/user/agentschat-sync.{service,timer}, enabled with systemctl --user.
+        std::error_code exeEc;
+        const fs::path executable = fs::read_symlink("/proc/self/exe", exeEc);
+        const char* home = std::getenv("HOME");
+        const char* xdgConfig = std::getenv("XDG_CONFIG_HOME");
+        const fs::path units = (xdgConfig && *xdgConfig ? fs::path(xdgConfig) : fs::path(home ? home : ".") / ".config") / "systemd" / "user";
+        std::string unitError;
+        bool written = true;
+        if (!remove)
+        {
+            fs::create_directories(units, exeEc);
+            written = Platform::WriteFileAtomic(units / "agentschat-sync.service",
+                          "[Unit]\nDescription=Agents Chat : synchronisation locale des caches\n\n[Service]\nType=oneshot\nExecStart=\"" +
+                              executable.string() + "\" --sync-cloud\n", unitError) &&
+                      Platform::WriteFileAtomic(units / "agentschat-sync.timer",
+                          "[Unit]\nDescription=Agents Chat : synchronisation toutes les 15 minutes\n\n[Timer]\nOnBootSec=2min\n"
+                          "OnUnitActiveSec=15min\n\n[Install]\nWantedBy=timers.target\n", unitError);
+        }
+        const std::wstring systemctl = Process::FindOnPath(L"systemctl");
+        std::atomic<bool> cancel{false};
+        Process::Result result;
+        if (written && !systemctl.empty())
+        {
+            if (!remove)
+                Process::Run({systemctl, L"--user", L"daemon-reload"}, L"", "", {}, cancel, {}, 20);
+            result = Process::Run({systemctl, L"--user", remove ? L"disable" : L"enable", L"--now", L"agentschat-sync.timer"},
+                                  L"", "", {}, cancel, {}, 20);
+        }
+        m_localSchedulerStatus = written && result.started && result.exitCode == 0
+            ? (remove ? "Planification locale désactivée." : "Planification locale active : toutes les 15 minutes.")
+            : "Échec de systemd : " + (!written ? unitError : systemctl.empty() ? std::string("systemctl introuvable")
+                                                                                : !result.error.empty() ? result.error : result.stderrText);
+#else
         wchar_t executable[MAX_PATH]{};
         GetModuleFileNameW(nullptr, executable, MAX_PATH);
         std::vector<std::wstring> args{L"C:\\Windows\\System32\\schtasks.exe", remove ? L"/Delete" : L"/Create",
@@ -3893,6 +3933,7 @@ void App::DrawCloudTab()
         m_localSchedulerStatus = result.started && result.exitCode == 0
             ? (remove ? "Planification locale désactivée." : "Planification locale active : toutes les 15 minutes.")
             : "Échec du Planificateur Windows : " + (!result.error.empty() ? result.error : result.stderrText);
+#endif
     };
     if (ImGui::Button("Activer le cron local")) schedulerCommand(false);
     ImGui::SameLine();
