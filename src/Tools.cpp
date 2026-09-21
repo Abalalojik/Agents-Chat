@@ -169,7 +169,7 @@ namespace Tools
             "ne retiens jamais une information déjà présente dans MÉMOIRE COMMUNE ou qu'une autre IA vient de retenir.\n"
             "- te_demander {\"question\": \"...\"} : poser une question qui attend sa décision.\n"
             "- tache {\"action\": \"creer\"|\"statut\", \"titre\": \"...\", \"assigne\": \"claude\", \"statut\": \"a_faire\"|\"en_cours\"|\"fait\"|\"bloque\"} : tableau des tâches du salon.\n"
-            "- demander_skill {\"nom\": \"...\", \"besoin\": \"...\"} : demander un nouvel outil (il sera fabriqué dans l'Atelier si elle accepte).\n";
+            "- demander_skill {\"nom\": \"...\", \"besoin\": \"...\"} : demander une nouvelle compétence (elle sera fabriquée dans l'Atelier si l'utilisatrice accepte).\n";
         if (type != ChannelType::Code && type != ChannelType::Bugs && (hasVault || hasLore))
         {
             g += "- lire_note {\"source\": \"vault\"|\"lore\", \"chemin\": \"dossier/Note.md\"}\n"

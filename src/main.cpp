@@ -6,6 +6,7 @@
 #include "Platform.h"
 #include "Settings.h"
 #include "Store.h"
+#include "Updater.h"
 
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
@@ -19,6 +20,8 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+
+#include "../resources/resource.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -139,7 +142,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     const bool scheduledSync = argc > 1 && std::wstring(argv[1]) == L"--sync-cloud";
     const bool captureAntigravity = argc > 1 && std::wstring(argv[1]) == L"--capture-antigravity-status";
+    const bool applyUpdate = argc > 3 && std::wstring(argv[1]) == L"--apply-update";
+    std::filesystem::path updateDestination;
+    unsigned long updateParentPid = 0;
+    if (applyUpdate)
+    {
+        updateDestination = argv[2];
+        try { updateParentPid = std::stoul(argv[3]); } catch (...) { updateParentPid = 0; }
+    }
     if (argv) LocalFree(argv);
+    if (applyUpdate)
+        return updateParentPid && Updater::ApplyPendingUpdate(updateDestination, updateParentPid) ? 0 : 3;
     if (captureAntigravity)
     {
         std::string payload((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
@@ -168,7 +181,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     ImGui_ImplWin32_EnableDpiAwareness();
     const float scale = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
 
-    WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, instance, nullptr, nullptr, nullptr, nullptr, L"AgentChats", nullptr};
+    WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, instance,
+                      LoadIconW(instance, MAKEINTRESOURCEW(IDI_AGENTCHATS)), nullptr, nullptr, nullptr,
+                      L"AgentChats", LoadIconW(instance, MAKEINTRESOURCEW(IDI_AGENTCHATS))};
     RegisterClassExW(&wc);
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"Agents Chat", WS_OVERLAPPEDWINDOW, 100, 100,
                               static_cast<int>(1400 * scale), static_cast<int>(860 * scale),

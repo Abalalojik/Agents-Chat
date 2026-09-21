@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(AgentChats LANGUAGES CXX)
+set(AGENTCHATS_VERSION "0.1.0")
 
 # Produce a genuinely portable Windows executable: the MSVC runtime is linked
 # statically, while DirectX/WinHTTP/Crypto remain normal Windows system DLLs.
@@ -37,11 +38,13 @@ target_compile_options(imgui PRIVATE /utf-8)
 
 # --- Application ---------------------------------------------------------------
 add_executable(AgentChats WIN32
+  resources/AgentChats.rc
   src/main.cpp
   src/App.cpp
   src/Store.cpp
   src/Settings.cpp
   src/OptionsModules.cpp
+  src/Updater.cpp
   src/ModelCatalog.cpp
   src/Platform.cpp
   src/Process.cpp
@@ -56,9 +59,10 @@ add_executable(AgentChats WIN32
 target_link_libraries(AgentChats PRIVATE
   imgui
   nlohmann_json::nlohmann_json
-  d3d11 dxgi d3dcompiler ole32 shell32 uuid winhttp crypt32 ws2_32)
+  d3d11 dxgi d3dcompiler ole32 shell32 uuid winhttp crypt32 bcrypt ws2_32)
 
 target_compile_definitions(AgentChats PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_definitions(AgentChats PRIVATE AGENTCHATS_VERSION="${AGENTCHATS_VERSION}")
 target_compile_options(AgentChats PRIVATE /utf-8 /W4 /permissive-)
 
 # --- Safety tests (path confinement, zones, mentions, tool parsing) ---------------------------

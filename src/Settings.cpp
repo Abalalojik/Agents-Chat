@@ -37,6 +37,7 @@ bool Settings::Load()
         m_maxTurns = std::clamp(doc.value("maxTurns", 8), 1, 40);
         m_allowedCommands = doc.value("allowedCommands", "");
         m_commitEmail = doc.value("commitEmail", "");
+        m_autoUpdate = doc.value("autoUpdate", true);
 
         const json keys = doc.value("apiKeys", json::object());
         for (const auto& [provider, protectedKey] : keys.items())
@@ -248,6 +249,14 @@ bool Settings::SetCommitEmail(const std::string& email)
     return true;
 }
 
+bool Settings::SetAutoUpdate(bool enabled)
+{
+    const bool previous = m_autoUpdate;
+    m_autoUpdate = enabled;
+    if (!Save()) { m_autoUpdate = previous; return false; }
+    return true;
+}
+
 bool Settings::Save()
 {
     json models = json::object();
@@ -269,7 +278,7 @@ bool Settings::Save()
     const json doc = {{"version", 1}, {"models", models}, {"offline", offline},
                       {"presenceOverrides", presenceOverrides}, {"apiKeys", keys},
                       {"userName", m_userName}, {"maxTurns", m_maxTurns}, {"allowedCommands", m_allowedCommands},
-                      {"commitEmail", m_commitEmail}};
+                      {"commitEmail", m_commitEmail}, {"autoUpdate", m_autoUpdate}};
 
     std::string error;
     if (!Platform::WriteFileAtomic(m_file, doc.dump(2), error))

@@ -43,6 +43,8 @@ public:
     bool SetAllowedCommands(const std::string& commands);
     const std::string& CommitEmail() const { return m_commitEmail; }
     bool SetCommitEmail(const std::string& email);
+    bool AutoUpdate() const { return m_autoUpdate; }
+    bool SetAutoUpdate(bool enabled);
 
     // API keys, stored encrypted (DPAPI). ApiKey returns "" when none.
     std::string ApiKey(const std::string& provider) const;
@@ -67,5 +69,6 @@ private:
     std::string m_allowedCommands;
     // Empty for a fresh installation: personal Git identities are local user data.
     std::string m_commitEmail;
+    bool m_autoUpdate = true;
     std::string m_lastError;
 };

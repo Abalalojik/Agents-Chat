@@ -257,7 +257,7 @@ namespace
         if (kind == "question") return "Question";
         if (kind == "correction") return "Correction";
         if (kind == "file_write") return "Écriture de fichier";
-        if (kind == "skill") return "Demande de skill";
+        if (kind == "skill") return "Demande de compétence";
         if (kind == "code") return "Travail de code";
         return "Demande";
     }
@@ -268,7 +268,7 @@ namespace
 // ===========================================================================
 
 App::App(Store& store, Settings& settings, void* hwnd)
-    : m_store(store), m_settings(settings), m_hwnd(hwnd), m_cloud(store.Root())
+    : m_store(store), m_settings(settings), m_hwnd(hwnd), m_cloud(store.Root()), m_updater(store.Root())
 {
     if (!m_store.Subservers().empty())
     {
@@ -279,6 +279,12 @@ App::App(Store& store, Settings& settings, void* hwnd)
     }
     ApplyAvailability();
     RefreshAvailability();
+    if (m_updater.SourceReady())
+    {
+        if (m_settings.AutoUpdate()) { m_updater.Download(); m_autoUpdateStarted = true; }
+    }
+    else
+        m_updater.PrepareSource();
 }
 
 App::~App()
@@ -430,6 +436,15 @@ std::vector<std::string> App::SalonMembers(const Channel& channel, bool forDefau
 void App::Frame()
 {
     m_cloud.Tick();
+    if (!m_selfWorkspaceConfigured && m_updater.SourceReady())
+    {
+        m_selfWorkspaceConfigured = m_store.EnsureSelfImprovementSubserver(Platform::Narrow(m_updater.SourcePath().wstring()));
+    }
+    if (m_updater.SourceReady() && m_settings.AutoUpdate() && !m_autoUpdateStarted && !m_updater.Busy())
+    {
+        m_updater.Download();
+        m_autoUpdateStarted = true;
+    }
     if (m_availReady.exchange(false))
         ApplyAvailability();
     ProcessEvents();
@@ -1078,7 +1093,7 @@ void App::DrawInboxItem(const InboxItem& item)
     }
     else if (item.kind == "skill")
     {
-        ImGui::Text("Skill : %s", args.value("nom", std::string("?")).c_str());
+        ImGui::Text("Compétence : %s", args.value("nom", std::string("?")).c_str());
         ImGui::TextUnformatted(args.value("besoin", std::string()).c_str());
     }
     else if (item.kind == "code")
@@ -1398,12 +1413,12 @@ void App::RequestSkill(const InboxItem& item)
     if (!fabrication)
         return;
     m_store.DecideInboxItem(item.id, "accepte", "envoyée à l'Atelier");
-    const std::string request = "@" + item.ai + " Fabrique la skill « " + args.value("nom", std::string("?")) +
+    const std::string request = "@" + item.ai + " Fabrique la compétence « " + args.value("nom", std::string("?")) +
                                 " » : " + args.value("besoin", std::string()) +
-                                "\nÉcris-la dans le dossier du projet (un dossier par skill, avec un SKILL.md qui décrit quand et comment l'utiliser) "
+                                "\nÉcris-la dans le dossier du projet (un dossier par compétence, avec un SKILL.md qui décrit quand et comment l'utiliser) "
                                 "en confiant le travail à ton agent de code.";
     m_store.AppendMessage(*atelier, *fabrication, "user", request);
-    PostSystem(item.subserverId, item.channelId, "Demande de skill envoyée à l'Atelier.");
+    PostSystem(item.subserverId, item.channelId, "Demande de compétence envoyée à l'Atelier.");
     if (!m_conductor.Busy())
         StartJob(*atelier, *fabrication, {item.ai});
 }
@@ -2122,7 +2137,7 @@ void App::HandleAction(const ConductorEvent& ev)
         item.ai = ev.ai;
         item.payload = args.dump();
         m_store.AddInboxItem(item);
-        PostSystem(sub->id, ch->id, who + " demande une skill : " + args.value("nom", std::string()) + " (boîte aux lettres).");
+        PostSystem(sub->id, ch->id, who + " demande une compétence : " + args.value("nom", std::string()) + " (boîte aux lettres).");
     }
     else if (name == "travail_code")
     {
@@ -2564,6 +2579,7 @@ void App::DrawOptionsWindow()
             switch (selected->view)
             {
             case OptionsView::General: DrawGeneralTab(); break;
+            case OptionsView::Updates: DrawUpdatesTab(); break;
             case OptionsView::Connections: DrawConnectionsTab(); break;
             case OptionsView::Models: DrawModelsTab(); break;
             case OptionsView::Memory: DrawMemoryTab(); break;
@@ -2579,6 +2595,48 @@ void App::DrawOptionsWindow()
         ImGui::EndChild();
     }
     ImGui::End();
+}
+
+void App::DrawUpdatesTab()
+{
+    ImGui::Text("Version installée : %s", kAgentChatsVersion);
+    ImGui::TextWrapped("Les mises à jour proviennent des releases de Abalalojik/Agents-Chat. "
+                       "L'exécutable est refusé si son empreinte SHA-256 publiée ne correspond pas.");
+    ImGui::Spacing();
+    bool automatic = m_settings.AutoUpdate();
+    if (ImGui::Checkbox("Rechercher et télécharger automatiquement au démarrage", &automatic))
+        m_settings.SetAutoUpdate(automatic);
+    ImGui::BeginDisabled(m_updater.Busy());
+    if (ImGui::Button("Rechercher maintenant")) m_updater.Check();
+    ImGui::SameLine();
+    if (ImGui::Button("Télécharger")) m_updater.Download();
+    ImGui::EndDisabled();
+    const std::string status = m_updater.Status();
+    if (!status.empty()) ImGui::TextWrapped("%s", status.c_str());
+    if (m_updater.Ready())
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, kColOk);
+        if (ImGui::Button("Installer et relancer Agents Chat") && !m_updater.Apply(m_hwnd))
+            m_store.SetError("Impossible de lancer l'installation de la mise à jour.");
+        ImGui::PopStyleColor();
+    }
+    ImGui::Spacing();
+    ImGui::SeparatorText("Auto-amélioration");
+    ImGui::TextWrapped("Une copie locale du code source est utilisée par le canal d'auto-amélioration. "
+                       "Les modifications peuvent rester purement locales ou être proposées volontairement par pull request.");
+    ImGui::TextWrapped("Copie locale : %s", Platform::Narrow(m_updater.SourcePath().wstring()).c_str());
+    ImGui::TextColored(m_updater.SourceReady() ? kColOk : kColWarn, "%s",
+                       m_updater.SourceReady() ? "Code source prêt." : "Clonage en attente ou indisponible.");
+    ImGui::BeginDisabled(m_updater.Busy());
+    if (!m_updater.SourceReady() && ImGui::Button("Cloner le code maintenant")) m_updater.PrepareSource();
+    if (m_updater.SourceReady())
+    {
+        if (ImGui::Button("Compiler une mise à jour locale")) m_updater.BuildLocal();
+        ImGui::SameLine();
+        if (ImGui::Button("Préparer une contribution pour PR")) m_updater.PrepareContribution();
+    }
+    ImGui::EndDisabled();
+    ImGui::TextColored(kColDim, "La préparation d'une contribution ne publie rien : le diff doit d'abord être relu et confirmé.");
 }
 
 void App::DrawExtensionModule(const char* title, const char* description)

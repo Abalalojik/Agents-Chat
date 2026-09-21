@@ -4,6 +4,7 @@
 #include "Conductor.h"
 #include "Settings.h"
 #include "Store.h"
+#include "Updater.h"
 
 #include <atomic>
 #include <map>
@@ -45,6 +46,7 @@ private:
     void DrawOptionsWindow();
     void DrawChatOptionsWindow();
     void DrawGeneralTab();
+    void DrawUpdatesTab();
     void DrawConnectionsTab();
     void DrawCloudTab();
     void DrawModelsTab();
@@ -77,6 +79,7 @@ private:
     Conductor m_conductor;
     CodeWorker m_codeWorker;
     CloudSync m_cloud;
+    Updater m_updater;
 
     std::string m_selectedSubserver;
     std::string m_selectedChannel;
@@ -151,6 +154,8 @@ private:
     std::string m_localSchedulerStatus;
     bool m_cloudLoaded = false;
     bool m_generalLoaded = false;
+    bool m_selfWorkspaceConfigured = false;
+    bool m_autoUpdateStarted = false;
     std::string m_memoryEditId, m_memoryEditText;
     std::string m_newTaskTitle;
     std::string m_todoOwner = "user";

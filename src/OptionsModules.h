@@ -6,6 +6,7 @@
 enum class OptionsView
 {
     General,
+    Updates,
     Connections,
     Models,
     Memory,

@@ -432,14 +432,20 @@ namespace
             {
                 std::vector<std::wstring> args = {gemini.exe, L"-p", Platform::Widen(input), L"--output-format", L"json",
                                                    L"--disable-slash-commands", L"--model", Platform::Widen(model),
-                                                   L"--print-timeout", L"300s"};
+                                                   L"--print-timeout", L"60s"};
                 std::string output;
                 const Process::Result p = Process::Run(args, req.workDir, "", [&](const std::string& line) {
                     output += line;
                     output += '\n';
-                }, cancel, {}, 330);
+                }, cancel, {}, 75);
                 if (!p.started) { r.error = p.error; return r; }
                 if (p.cancelled) { r.error = "arrêté"; return r; }
+                if (p.timedOut)
+                {
+                    r.error = "Antigravity n'a rendu aucune réponse en 75 secondes (processus arrêté).";
+                    r.reason = "délai dépassé avec le modèle " + model;
+                    return r; // do not silently wait another 75 s on every fallback model
+                }
                 try
                 {
                     const json result = json::parse(output);

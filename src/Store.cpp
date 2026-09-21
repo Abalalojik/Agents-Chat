@@ -434,6 +434,7 @@ bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
     sub.name = "Amélioration d’Agents Chat";
     sub.codePath = codePath;
     sub.mainPath = codePath;
+    sub.githubUrl = "https://github.com/Abalalojik/Agents-Chat";
 
     Channel discussion;
     discussion.id = "agentchats-feedback";
@@ -444,6 +445,7 @@ bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
     discussion.roles["chatgpt"] = {"Développeur", kRolePresets[1].instructions, true};
     discussion.roles["claude"] = {"Architecte", kRolePresets[4].instructions, false};
     discussion.roles["gemini"] = {"Chercheur", kRolePresets[5].instructions, false};
+    for (auto& [_, role] : discussion.roles) role.canWriteFiles = true;
 
     Channel implementation;
     implementation.id = "agentchats-code";
@@ -454,6 +456,7 @@ bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
     implementation.roles["chatgpt"] = {"Chef d'équipe", kRolePresets[0].instructions, true};
     implementation.roles["claude"] = {"Architecte", kRolePresets[4].instructions, false};
     implementation.roles["gemini"] = {"Chercheur", kRolePresets[5].instructions, false};
+    for (auto& [_, role] : implementation.roles) role.canWriteFiles = true;
 
     sub.channels.push_back(std::move(discussion));
     sub.channels.push_back(std::move(implementation));
