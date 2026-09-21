@@ -2545,8 +2545,29 @@ void App::DrawChatOptionsWindow()
                 m_store.SetAiLevel(*channel, ai, &level);
         ImGui::EndCombo();
     }
-    const ModelChoice choice = m_settings.Choice(ai, channel->LevelFor(ai));
-    ImGui::TextColored(kColDim, "Modèle : %s · réflexion : %s", choice.model.c_str(), choice.thinking.c_str());
+    const ModelLevel effectiveLevel = channel->LevelFor(ai);
+    ModelChoice choice = m_settings.Choice(ai, effectiveLevel);
+    if (const AiCatalogEntry* entry = FindCatalogEntry(ai))
+    {
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Modèle utilisé dès le prochain message");
+        bool changed = false;
+        ImGui::SetNextItemWidth(300.0f * scale);
+        changed |= ValueCombo("##chatAiModel", choice.model, entry->models, true);
+        ImGui::SameLine();
+        ImGui::TextColored(kColDim, "Réflexion");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(150.0f * scale);
+        changed |= ValueCombo("##chatAiThinking", choice.thinking, entry->thinking, false);
+        if (changed)
+        {
+            m_settings.SetChoice(ai, effectiveLevel, choice);
+            if (ai == "gemini")
+                RefreshAvailability("gemini");
+        }
+        ImGui::TextColored(kColDim, "Ce choix s'applique aux salons utilisant le niveau %s pour cette IA.",
+                           ModelLevelLabel(effectiveLevel));
+    }
 
     ImGui::Spacing();
     ImGui::SeparatorText("Rôle dans ce salon");

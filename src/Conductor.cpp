@@ -225,12 +225,9 @@ void Conductor::Run(JobInput in)
             post(ConductorEvent::Kind::Notice, n, std::string(AiDisplayName(n)) + " n'est pas disponible dans ce salon pour le moment.");
     }
     if (named.empty())
-    {
-        if (!in.lead.empty() && std::find(in.members.begin(), in.members.end(), in.lead) != in.members.end())
-            queue.push_back(in.lead);
-        else
-            queue.assign(in.defaultSpeakers.begin(), in.defaultSpeakers.end());
-    }
+        // No @mention means addressing the whole room. `members` is already
+        // filtered by channel role and live/routable presence.
+        queue.assign(in.members.begin(), in.members.end());
     if (queue.empty() && named.empty())
         post(ConductorEvent::Kind::Notice, "", "Aucune IA n'est disponible (voir « Membres » et Options → Connexions).");
 
