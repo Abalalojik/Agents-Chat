@@ -41,6 +41,7 @@ add_executable(AgentChats WIN32
   src/App.cpp
   src/Store.cpp
   src/Settings.cpp
+  src/OptionsModules.cpp
   src/ModelCatalog.cpp
   src/Platform.cpp
   src/Process.cpp

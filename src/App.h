@@ -49,6 +49,7 @@ private:
     void DrawCloudTab();
     void DrawModelsTab();
     void DrawMemoryTab();
+    void DrawExtensionModule(const char* title, const char* description);
     void DrawPresenceMenu(const std::string& aiId, const char* tier, const char* label, const Presence& presence);
     void DrawRoleMenu(Channel& channel, const std::string& ai);
 
@@ -116,6 +117,7 @@ private:
     // Popups
     bool m_showOptions = false;
     bool m_focusOptions = false;
+    std::string m_optionsModule = "general";
     bool m_showChatOptions = false;
     bool m_focusChatOptions = false;
     bool m_showMembers = true;

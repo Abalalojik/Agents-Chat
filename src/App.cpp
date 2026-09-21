@@ -1,5 +1,6 @@
 #include "App.h"
 #include "ModelCatalog.h"
+#include "OptionsModules.h"
 #include "Platform.h"
 #include "Process.h"
 #include "Tools.h"
@@ -2350,7 +2351,7 @@ void App::DrawOptionsWindow()
     if (!m_showOptions)
         return;
     const float scale = ImGui::GetStyle().FontScaleDpi;
-    ImGui::SetNextWindowSize(ImVec2(1000.0f * scale, 600.0f * scale), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1100.0f * scale, 680.0f * scale), ImGuiCond_FirstUseEver);
     // Bring to front once when opened; doing it every frame closes every combo instantly.
     if (m_focusOptions)
     {
@@ -2359,37 +2360,66 @@ void App::DrawOptionsWindow()
     }
     if (ImGui::Begin("Options", &m_showOptions, ImGuiWindowFlags_NoCollapse))
     {
-        if (ImGui::BeginTabBar("##optionsTabs"))
+        const auto& modules = OptionsModules();
+        if (std::none_of(modules.begin(), modules.end(), [&](const OptionsModule& module) {
+                return module.id == m_optionsModule;
+            }))
+            m_optionsModule = "general";
+
+        ImGui::BeginChild("##optionsNavigation", ImVec2(240.0f * scale, 0), ImGuiChildFlags_Borders);
+        std::string_view category;
+        for (const OptionsModule& module : modules)
         {
-            if (ImGui::BeginTabItem("Général"))
+            if (module.category != category)
             {
-                DrawGeneralTab();
-                ImGui::EndTabItem();
+                category = module.category;
+                if (ImGui::GetCursorPosY() > 8.0f * scale)
+                    ImGui::Spacing();
+                ImGui::TextColored(kColDim, "%.*s", static_cast<int>(category.size()), category.data());
+                ImGui::Separator();
             }
-            if (ImGui::BeginTabItem("Connexions"))
-            {
-                DrawConnectionsTab();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Données personnelles"))
-            {
-                DrawCloudTab();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Modèles"))
-            {
-                DrawModelsTab();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Mémoire"))
-            {
-                DrawMemoryTab();
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
+            if (ImGui::Selectable(module.label.data(), m_optionsModule == module.id,
+                                  ImGuiSelectableFlags_None, ImVec2(0, 34.0f * scale)))
+                m_optionsModule = module.id;
         }
+        ImGui::EndChild();
+        ImGui::SameLine();
+        ImGui::BeginChild("##optionsModule", ImVec2(0, 0), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        const auto selected = std::find_if(modules.begin(), modules.end(), [&](const OptionsModule& module) {
+            return module.id == m_optionsModule;
+        });
+        if (selected != modules.end())
+        {
+            ImGui::TextColored(kColAccent, "%s", selected->label.data());
+            ImGui::Separator();
+            switch (selected->view)
+            {
+            case OptionsView::General: DrawGeneralTab(); break;
+            case OptionsView::Connections: DrawConnectionsTab(); break;
+            case OptionsView::Models: DrawModelsTab(); break;
+            case OptionsView::Memory: DrawMemoryTab(); break;
+            case OptionsView::Connectors: DrawCloudTab(); break;
+            case OptionsView::Plugins:
+                DrawExtensionModule("Plugins", "Modules locaux qui ajoutent des fonctions à Agents Chat.");
+                break;
+            case OptionsView::Mcps:
+                DrawExtensionModule("MCPs", "Serveurs MCP et informations de connexion accessibles aux agents autorisés.");
+                break;
+            }
+        }
+        ImGui::EndChild();
     }
     ImGui::End();
+}
+
+void App::DrawExtensionModule(const char* title, const char* description)
+{
+    ImGui::TextWrapped("%s", description);
+    ImGui::Spacing();
+    ImGui::SeparatorText("Modules enregistrés");
+    ImGui::TextColored(kColDim, "Aucun %s enregistré pour le moment.", title);
+    ImGui::TextColored(kColDim, "Le registre du menu est prêt ; l'installation et la configuration seront ajoutées ici.");
 }
 
 void App::DrawChatOptionsWindow()
