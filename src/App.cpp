@@ -1195,7 +1195,12 @@ void App::DrawInboxItem(const InboxItem& item)
         {
             const char* acceptLabel = (item.kind == "correction" || item.kind == "file_write") ? "Appliquer" : item.kind == "code" ? "Lancer" : "Accepter";
             ImGui::PushStyleColor(ImGuiCol_Button, kColOk);
-            if (ImGui::Button(acceptLabel))
+            // A decision needs a real click: keystrokes that land here while the window steals
+            // focus (Space/Enter on a navigated button) must never approve anything.
+            ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+            const bool acceptClicked = ImGui::Button(acceptLabel);
+            ImGui::PopItemFlag();
+            if (acceptClicked)
             {
                 if (item.kind == "correction")
                     ApplyCorrection(item);
@@ -1229,7 +1234,10 @@ void App::DrawInboxItem(const InboxItem& item)
             ImGui::PopStyleColor();
         }
         ImGui::SameLine();
-        if (ImGui::Button(item.kind == "question" ? "Ignorer" : "Refuser"))
+        ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+        const bool refuseClicked = ImGui::Button(item.kind == "question" ? "Ignorer" : "Refuser");
+        ImGui::PopItemFlag();
+        if (refuseClicked)
         {
             m_store.DecideInboxItem(item.id, "refuse", "");
             PostSystem(item.subserverId, item.channelId,
@@ -2553,8 +2561,12 @@ void App::AcceptSelfImprovement(const InboxItem& item)
             m_store.SetError("Les mises à jour sont occupées ; réessaie dans un instant.");
             return;
         }
+        if (!m_updater.BuildLocal(fs::path(Platform::Widen(sub->codePath))))
+        {
+            m_store.SetError("Compilation impossible : pas de CMakeLists.txt dans le dossier de code, ou mises à jour occupées.");
+            return;
+        }
         m_selfBuildOrigin = SelfBuildOrigin{subId, chanId, item.ai};
-        m_updater.BuildLocal(fs::path(Platform::Widen(sub->codePath)));
         m_store.DecideInboxItem(itemId, "accepte", "Compilation et tests lancés.");
         PostSystem(subId, chanId, "Compilation et tests de la version modifiée lancés (plusieurs minutes la première fois).");
     }

@@ -81,11 +81,11 @@ void Updater::PrepareSource()
     });
 }
 
-void Updater::BuildLocal(const fs::path& sourceOverride)
+bool Updater::BuildLocal(const fs::path& sourceOverride)
 {
     const fs::path source = sourceOverride.empty() ? m_source : sourceOverride;
     std::error_code sourceEc;
-    if (!fs::is_regular_file(source / "CMakeLists.txt", sourceEc) || m_busy.exchange(true)) return;
+    if (!fs::is_regular_file(source / "CMakeLists.txt", sourceEc) || m_busy.exchange(true)) return false;
     if (m_thread.joinable()) m_thread.join();
     m_thread = std::thread([this, source] {
         BuildReport report;
@@ -138,6 +138,7 @@ void Updater::BuildLocal(const fs::path& sourceOverride)
         { std::lock_guard<std::mutex> lock(m_mutex); m_ready = true; m_version = "locale"; }
         finish("Version locale compilée, tests réussis : prête à installer.");
     });
+    return true;
 }
 
 std::optional<Updater::BuildReport> Updater::TakeReport()

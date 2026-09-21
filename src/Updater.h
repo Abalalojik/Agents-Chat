@@ -17,7 +17,7 @@ public:
     void PrepareSource();
     // Builds AgentChats + AgentChatsTests from a source tree (default: the local clone) and
     // runs the tests; only a build whose tests pass is staged for installation.
-    void BuildLocal(const std::filesystem::path& source = {});
+    bool BuildLocal(const std::filesystem::path& source = {}); // false: not started (busy, no CMakeLists.txt)
     struct BuildReport
     {
         bool ok = false;          // built, tests passed, staged

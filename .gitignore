@@ -1,4 +1,5 @@
 build/
+build-*/
 .vs/
 out/
 _CPack_Packages/
