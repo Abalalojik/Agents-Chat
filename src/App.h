@@ -104,6 +104,8 @@ private:
     std::map<std::string, std::string> m_codeProgress; // job id -> last progress lines
     std::map<std::string, std::string> m_codeJobChannel;
     std::map<std::string, std::string> m_codeJobAi;
+    // Exact command approved once for an AI; consumed by its next code job.
+    std::map<std::string, std::string> m_oneShotAllowedCommand;
     // Availability detection (background)
     struct Availability
     {

@@ -203,6 +203,15 @@ int main(int argc, char** argv)
     CHECK(projectFile.find("Lilith") != std::string::npos);
     CHECK(Tools::Guide(ChannelType::Code, false, false, true).find("source\": \"principal") != std::string::npos);
     CHECK(Tools::Guide(ChannelType::Code, false, false, true).find("ecrire_fichier") != std::string::npos);
+    CHECK(Tools::Guide(ChannelType::Analyse, false, false, true).find("OUTILS NATIFS DU PROJET") != std::string::npos);
+    CHECK(Tools::Guide(ChannelType::Analyse, false, false, true).find("ecrire_fichier") == std::string::npos);
+    CHECK(Tools::Guide(ChannelType::Code, false, false, true).find("demander_autorisation") != std::string::npos);
+    const std::string numbered = Tools::RunRead({"lire", {{"source", "principal"}, {"chemin", "Chapitre 3.md"}, {"debut", 1}, {"fin", 1}}}, src, ChannelType::Analyse);
+    CHECK(numbered.find("1: Lilith") != std::string::npos);
+    const std::string recursive = Tools::RunRead({"lister", {{"source", "principal"}, {"chemin", ""}, {"recursif", true}}}, src, ChannelType::Analyse);
+    CHECK(recursive.find("lore/persos/Lilith.md") != std::string::npos && recursive.find("octets") != std::string::npos);
+    const std::string searched = Tools::RunRead({"chercher", {{"source", "principal"}, {"motif", "magie.*glace"}, {"extensions", {".md"}}, {"regex", true}}}, src, ChannelType::Analyse);
+    CHECK(searched.find("lore/persos/Lilith.md:1:") != std::string::npos);
 
     // --- Project writes honor aliases, Can Write and exclusions ----------------------------
     std::string writeError;

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
+#include <regex>
 #include <sstream>
 
 using nlohmann::json;
@@ -29,6 +30,26 @@ namespace Tools
             in.read(s.data(), static_cast<std::streamsize>(maxBytes));
             s.resize(static_cast<size_t>(in.gcount()));
             return s;
+        }
+
+        std::string WithLineNumbers(const std::string& text, int firstLine, int lastLine)
+        {
+            firstLine = std::max(1, firstLine);
+            if (lastLine > 0 && lastLine < firstLine)
+                return {};
+            std::istringstream input(text);
+            std::ostringstream output;
+            std::string line;
+            int number = 1;
+            while (std::getline(input, line))
+            {
+                if (number >= firstLine && (lastLine <= 0 || number <= lastLine))
+                    output << number << ": " << line << '\n';
+                if (lastLine > 0 && number >= lastLine)
+                    break;
+                ++number;
+            }
+            return output.str();
         }
 
         bool IsTextNote(const fs::path& p)
@@ -147,7 +168,7 @@ namespace Tools
 
     bool IsReadTool(const std::string& name)
     {
-        return name == "lire_note" || name == "chercher" || name == "lister" || name == "chercher_historique" ||
+        return name == "lire_note" || name == "lire" || name == "chercher" || name == "lister" || name == "chercher_historique" ||
                name == "chercher_mails" || name == "lire_agenda" || name == "solde_comptes" ||
                name == "chercher_transactions" || name == "__invalide";
     }
@@ -168,6 +189,7 @@ namespace Tools
             "« toi » = ce qui concerne l'utilisatrice partout. Cette mémoire est partagée en temps réel par toute l'équipe : "
             "ne retiens jamais une information déjà présente dans MÉMOIRE COMMUNE ou qu'une autre IA vient de retenir.\n"
             "- te_demander {\"question\": \"...\"} : poser une question qui attend sa décision.\n"
+            "- demander_autorisation {\"commande\": \"commande exacte\", \"raison\": \"pourquoi elle est nécessaire\"} : demander une autorisation ponctuelle pour le prochain travail de ton agent de code.\n"
             "- tache {\"action\": \"creer\"|\"statut\", \"titre\": \"...\", \"assigne\": \"claude\", \"statut\": \"a_faire\"|\"en_cours\"|\"fait\"|\"bloque\"} : tableau des tâches du salon.\n"
             "- demander_skill {\"nom\": \"...\", \"besoin\": \"...\"} : demander une nouvelle compétence (elle sera fabriquée dans l'Atelier si l'utilisatrice accepte).\n";
         if (type != ChannelType::Code && type != ChannelType::Bugs && (hasVault || hasLore))
@@ -176,14 +198,16 @@ namespace Tools
                  "- chercher {\"source\": \"vault\"|\"lore\", \"requete\": \"mots\"} : trouver les notes qui en parlent.\n"
                  "- lister {\"source\": \"vault\"|\"lore\", \"dossier\": \"\"} : voir les notes d'un dossier.\n";
         }
-        if ((type == ChannelType::Code || type == ChannelType::Bugs) && hasCode)
+        if (hasCode)
         {
-            g += "- lire_note {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\"} : lire un fichier texte du projet.\n"
-                 "- chercher {\"source\": \"principal\", \"requete\": \"texte\"} : rechercher dans les fichiers texte du projet.\n"
-                 "- lister {\"source\": \"principal\", \"dossier\": \"\"} : parcourir les dossiers et fichiers du projet.\n"
-                 "- ecrire_fichier {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\", \"contenu\": \"...\"} : créer ou remplacer un fichier texte.\n"
-                 "- remplacer_dans_fichier {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\", \"ancien\": \"texte exact unique\", \"nouveau\": \"...\"} : modification ciblée.\n"
-                 "Les écritures exigent la permission Can Write et l'approbation de l'utilisatrice.\n";
+            g += "OUTILS NATIFS DU PROJET (immédiatement appelables, sans demander de compétence) :\n"
+                 "- lister {\"source\": \"principal\", \"chemin\": \"\", \"recursif\": true} : arborescence avec taille ; .git et node_modules sont exclus.\n"
+                 "- lire {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\", \"debut\": 1, \"fin\": 200} : texte avec numéros de ligne. `lire_note` reste un alias compatible.\n"
+                 "- chercher {\"source\": \"principal\", \"motif\": \"TODO\", \"extensions\": [\".cpp\", \".h\"], \"regex\": false} : occurrences fichier:ligne:extrait. `requete` reste un alias de `motif`.\n";
+            if (type == ChannelType::Code || type == ChannelType::Bugs)
+                g += "- ecrire_fichier {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\", \"contenu\": \"...\"} : créer ou remplacer un fichier texte.\n"
+                     "- remplacer_dans_fichier {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\", \"ancien\": \"texte exact unique\", \"nouveau\": \"...\"} : modification ciblée.\n"
+                     "Les écritures exigent la permission Can Write et l'approbation de l'utilisatrice.\n";
         }
         if (type == ChannelType::Analyse && hasVault)
             g += "- proposer_correction {\"source\": \"vault\", \"chemin\": \"...\", \"ancien\": \"texte exact\", \"nouveau\": \"texte corrigé\"} : "
@@ -464,7 +488,7 @@ namespace Tools
             return "Dans un salon d'ingénierie, utilise source=principal ou un dossier supplémentaire autorisé.";
         if (source == "global" && src.globalRead)
         {
-            const std::string raw = call.name == "lister" ? a.value("dossier", "") : a.value("chemin", "");
+            const std::string raw = call.name == "lister" ? a.value("chemin", a.value("dossier", std::string())) : a.value("chemin", "");
             const fs::path absolute = fs::path(Platform::Widen(raw));
             if (absolute.is_absolute())
             {
@@ -475,7 +499,7 @@ namespace Tools
         if (!root)
             return "Ce sous-serveur n'a pas de " + a.value("source", std::string("vault")) + ".";
 
-        if (call.name == "lire_note")
+        if (call.name == "lire_note" || call.name == "lire")
         {
             const fs::path requested = fs::path(Platform::Widen(a.value("chemin", "")));
             const fs::path p = source == "global" && requested.is_absolute() ? requested : Confine(*root, a.value("chemin", ""));
@@ -485,40 +509,70 @@ namespace Tools
             std::string text = ReadFileUtf8(p, 60000);
             if (text.size() == 60000)
                 text += "\n[…note tronquée à 60 000 caractères]";
+            if (call.name == "lire")
+                text = WithLineNumbers(text, a.value("debut", 1), a.value("fin", 0));
             return "Contenu de « " + Rel(*root, p) + " » :\n" + text;
         }
 
         if (call.name == "lister")
         {
-            const fs::path requested = fs::path(Platform::Widen(a.value("dossier", "")));
+            const std::string relativeArg = a.value("chemin", a.value("dossier", std::string()));
+            const fs::path requested = fs::path(Platform::Widen(relativeArg));
             const fs::path dir = source == "global" && requested.is_absolute() ? requested :
-                                 (a.value("dossier", "").empty() ? *root : Confine(*root, a.value("dossier", "")));
+                                 (relativeArg.empty() ? *root : Confine(*root, relativeArg));
             std::error_code ec;
             if (dir.empty() || !fs::is_directory(dir, ec))
-                return "Dossier introuvable : " + a.value("dossier", "");
+                return "Dossier introuvable : " + relativeArg;
             std::string out;
             int n = 0;
-            for (const auto& e : fs::directory_iterator(dir, ec))
-            {
+            const bool recursive = a.value("recursif", false);
+            auto addEntry = [&](const fs::directory_entry& e) {
                 const fs::path rel = fs::relative(e.path(), *root, ec);
                 if (ExclusionMode(src, *root, e.path()) == "cant_access" || Hidden(rel) ||
                     (!e.is_directory() && !IsTextNote(e.path())))
-                    continue;
-                out += (e.is_directory() ? "[dossier] " : "") + Platform::Narrow(rel.generic_wstring()) + "\n";
-                if (++n >= 200)
+                    return;
+                out += (e.is_directory() ? "[dossier] " : "[fichier] ") + Platform::Narrow(rel.generic_wstring());
+                if (e.is_regular_file())
+                    out += " — " + std::to_string(e.file_size(ec)) + " octets";
+                out += "\n";
+                ++n;
+            };
+            if (recursive)
+            {
+                for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
+                     it != fs::recursive_directory_iterator() && n < 500; it.increment(ec))
                 {
-                    out += "[…liste tronquée]\n";
-                    break;
+                    const fs::path rel = fs::relative(it->path(), *root, ec);
+                    if (Hidden(rel) || ExclusionMode(src, *root, it->path()) == "cant_access")
+                    {
+                        if (it->is_directory()) it.disable_recursion_pending();
+                        continue;
+                    }
+                    addEntry(*it);
                 }
             }
+            else
+                for (const auto& e : fs::directory_iterator(dir, ec))
+                    if (n < 500) addEntry(e);
+            if (n >= 500) out += "[…liste tronquée]\n";
             return out.empty() ? "Dossier vide." : out;
         }
 
         if (call.name == "chercher")
         {
-            const std::string query = Lower(a.value("requete", ""));
-            if (query.empty())
+            const std::string rawQuery = a.value("motif", a.value("requete", std::string()));
+            const std::string query = Lower(rawQuery);
+            if (rawQuery.empty())
                 return "Requête vide.";
+            const bool regexMode = a.value("regex", false);
+            std::regex expression;
+            if (regexMode)
+                try { expression = std::regex(rawQuery, std::regex::ECMAScript | std::regex::icase); }
+                catch (const std::regex_error& e) { return std::string("Expression régulière invalide : ") + e.what(); }
+            std::vector<std::string> extensions;
+            if (a.contains("extensions") && a["extensions"].is_array())
+                for (const json& ext : a["extensions"])
+                    if (ext.is_string()) extensions.push_back(Lower(ext.get<std::string>()));
             std::string out;
             int hits = 0, files = 0;
             std::error_code ec;
@@ -537,31 +591,31 @@ namespace Tools
                     continue;
                 if (!it->is_regular_file() || !IsTextNote(it->path()))
                     continue;
+                if (!extensions.empty())
+                {
+                    const std::string ext = Lower(Platform::Narrow(it->path().extension().wstring()));
+                    if (std::find(extensions.begin(), extensions.end(), ext) == extensions.end())
+                        continue;
+                }
                 ++files;
                 const std::string text = ReadFileUtf8(it->path(), 400000);
                 const std::string lower = Lower(text);
                 const std::string name = Platform::Narrow(rel.generic_wstring());
-                if (Lower(name).find(query) != std::string::npos)
+                std::istringstream lines(text);
+                std::string line;
+                int lineNumber = 0, perFile = 0;
+                while (std::getline(lines, line) && perFile < 20 && hits < 100)
                 {
-                    out += name + " (titre)\n";
-                    ++hits;
-                }
-                size_t at = lower.find(query);
-                int perFile = 0;
-                while (at != std::string::npos && perFile < 3 && hits < 30)
-                {
-                    const size_t lineStart = text.rfind('\n', at) == std::string::npos ? 0 : text.rfind('\n', at) + 1;
-                    size_t lineEnd = text.find('\n', at);
-                    if (lineEnd == std::string::npos)
-                        lineEnd = text.size();
-                    std::string line = text.substr(lineStart, std::min<size_t>(lineEnd - lineStart, 300));
-                    out += name + " : " + line + "\n";
+                    ++lineNumber;
+                    const bool matches = regexMode ? std::regex_search(line, expression) : Lower(line).find(query) != std::string::npos;
+                    if (!matches) continue;
+                    if (line.size() > 300) line.resize(300);
+                    out += name + ":" + std::to_string(lineNumber) + ":" + line + "\n";
                     ++hits;
                     ++perFile;
-                    at = lower.find(query, lineEnd);
                 }
             }
-            return hits ? out : "Rien trouvé pour « " + a.value("requete", "") + " ».";
+            return hits ? out : "Rien trouvé pour « " + rawQuery + " ».";
         }
 
         return "Outil inconnu : " + call.name;

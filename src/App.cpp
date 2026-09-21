@@ -255,6 +255,7 @@ namespace
     const char* InboxKindLabel(const std::string& kind)
     {
         if (kind == "question") return "Question";
+        if (kind == "permission") return "Autorisation ponctuelle";
         if (kind == "correction") return "Correction";
         if (kind == "file_write") return "Écriture de fichier";
         if (kind == "skill") return "Demande de compétence";
@@ -1065,6 +1066,13 @@ void App::DrawInboxItem(const InboxItem& item)
         if (!pending && !item.answer.empty())
             ImGui::TextColored(kColDim, "Ta réponse : %s", item.answer.c_str());
     }
+    else if (item.kind == "permission")
+    {
+        ImGui::TextColored(kColWarn, "Commande exacte demandée :");
+        ImGui::TextWrapped("%s", args.value("commande", std::string("?")).c_str());
+        ImGui::TextColored(kColDim, "Raison : %s", args.value("raison", std::string("non précisée")).c_str());
+        ImGui::TextColored(kColDim, "Valable une seule fois, uniquement pour le prochain travail de cet agent de code.");
+    }
     else if (item.kind == "correction")
     {
         ImGui::TextColored(kColDim, "%s : %s", args.value("source", std::string("vault")).c_str(), args.value("chemin", std::string()).c_str());
@@ -1136,6 +1144,22 @@ void App::DrawInboxItem(const InboxItem& item)
                     ApplyProjectEdit(item);
                 else if (item.kind == "code")
                     LaunchCodeWork(item);
+                else if (item.kind == "permission")
+                {
+                    const std::string command = Trim(args.value("commande", std::string()));
+                    const bool accepted = !command.empty();
+                    if (accepted)
+                        m_oneShotAllowedCommand[item.ai] = command;
+                    const std::string outcome = accepted ? "Autorisation ponctuelle accordée : " + command
+                                                         : "Autorisation invalide.";
+                    m_store.DecideInboxItem(item.id, accepted ? "accepte" : "refuse", outcome);
+                    PostSystem(item.subserverId, item.channelId, outcome);
+                    if (accepted && sub && ch && !m_conductor.Busy())
+                    {
+                        m_store.AppendMessage(*sub, *ch, "user", "Autorisation ponctuelle accordée pour `" + command + "`. Reprends la tâche bloquée.");
+                        StartJob(*sub, *ch, {item.ai});
+                    }
+                }
                 else if (item.kind == "skill")
                     RequestSkill(item);
             }
@@ -1376,6 +1400,13 @@ void App::LaunchCodeWork(const InboxItem& item)
     job.instructions = args.value("instructions", "");
     job.projectDir = Platform::Widen(sub->codePath);
     job.allowedCommands = m_settings.AllowedCommands();
+    if (const auto once = m_oneShotAllowedCommand.find(item.ai); once != m_oneShotAllowedCommand.end())
+    {
+        if (!job.allowedCommands.empty() && job.allowedCommands.back() != '\n')
+            job.allowedCommands += '\n';
+        job.allowedCommands += once->second;
+        m_oneShotAllowedCommand.erase(once);
+    }
     const std::string jobId = m_codeWorker.Start(job);
     m_codeProgress[jobId] = "démarrage…";
     m_codeJobChannel[jobId] = ch->id;
@@ -2063,6 +2094,30 @@ void App::HandleAction(const ConductorEvent& ev)
         item.blocking = true;
         m_store.AddInboxItem(item);
         PostSystem(sub->id, ch->id, who + " te pose une question (boîte aux lettres) : " + args.value("question", std::string()));
+    }
+    else if (name == "demander_autorisation")
+    {
+        const std::string command = Trim(args.value("commande", std::string()));
+        const std::string reason = Trim(args.value("raison", std::string()));
+        if ((ch->type != ChannelType::Code && ch->type != ChannelType::Bugs) || !CodeTwinOf(ev.ai))
+        {
+            PostSystem(sub->id, ch->id, who + " ne peut demander une commande que dans un salon Code ou Bugs.");
+            return;
+        }
+        if (command.empty() || command.size() > 500 || command.find('\n') != std::string::npos || command.find('\r') != std::string::npos)
+        {
+            PostSystem(sub->id, ch->id, who + " a formulé une autorisation invalide : une seule commande exacte est requise.");
+            return;
+        }
+        InboxItem item;
+        item.kind = "permission";
+        item.subserverId = sub->id;
+        item.channelId = ch->id;
+        item.ai = ev.ai;
+        item.payload = json{{"commande", command}, {"raison", reason}}.dump();
+        item.blocking = true;
+        m_store.AddInboxItem(item);
+        PostSystem(sub->id, ch->id, who + " demande une autorisation ponctuelle (boîte aux lettres) : " + command);
     }
     else if (name == "proposer_correction")
     {
