@@ -43,6 +43,7 @@ private:
     void DrawEditSourcesPopup();
     void DrawCreateChannelPopup();
     void DrawOptionsWindow();
+    void DrawChatOptionsWindow();
     void DrawGeneralTab();
     void DrawConnectionsTab();
     void DrawCloudTab();
@@ -114,6 +115,9 @@ private:
     // Popups
     bool m_showOptions = false;
     bool m_focusOptions = false;
+    bool m_showChatOptions = false;
+    bool m_focusChatOptions = false;
+    std::string m_chatOptionsAi = "chatgpt";
     // Rename / delete (sous-serveurs and salons)
     std::string m_renameSubserver, m_renameChannel, m_renameText;
     std::string m_deleteSubserver, m_deleteChannel;

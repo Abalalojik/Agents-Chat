@@ -418,6 +418,7 @@ void App::Frame()
     ImGui::End();
 
     DrawOptionsWindow();
+    DrawChatOptionsWindow();
 }
 
 // ===========================================================================
@@ -497,6 +498,18 @@ void App::DrawSubserverColumn(float height)
     ImGui::PopStyleColor(2);
     ImGui::SetItemTooltip("Nouveau sous-serveur");
 
+    const float optionsY = ImGui::GetWindowHeight() - ImGui::GetStyle().WindowPadding.y - button;
+    if (ImGui::GetCursorPosY() < optionsY)
+        ImGui::SetCursorPosY(optionsY);
+    ImGui::PushStyleColor(ImGuiCol_Button, kColChat);
+    if (ImGui::Button("...##appOptions", ImVec2(button, button)))
+    {
+        m_showOptions = true;
+        m_focusOptions = true;
+    }
+    ImGui::PopStyleColor();
+    ImGui::SetItemTooltip("Options de l'application");
+
     ImGui::PopStyleVar(2);
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -536,14 +549,15 @@ void App::DrawChannelColumn(float height)
     else
     {
         ImGui::TextUnformatted(sub->name.c_str());
-        ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize("Sources").x - 8.0f * scale);
-        if (ImGui::SmallButton("Sources"))
+        if (ImGui::Button("...##serverOptions", ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())))
         {
+            m_renameText = sub->name;
             m_editVault = sub->vaultPath;
             m_editLore = sub->lorePath;
             m_editCode = sub->codePath;
             m_openEditSources = true;
         }
+        ImGui::SetItemTooltip("Options du sous-serveur");
         ImGui::Separator();
 
         auto source = [](const char* label, const std::string& path) {
@@ -622,10 +636,10 @@ void App::DrawChannelColumn(float height)
     if (ImGui::GetCursorPosY() < barY)
         ImGui::SetCursorPosY(barY);
     ImGui::Separator();
-    if (ImGui::Button("Options", ImVec2(-1, 0)))
+    if (ImGui::Button("Options du chat", ImVec2(-1, 0)))
     {
-        m_showOptions = true;
-        m_focusOptions = true;
+        m_showChatOptions = true;
+        m_focusChatOptions = true;
     }
 
     ImGui::EndChild();
@@ -1293,35 +1307,11 @@ void App::DrawMemberRow(Channel* channel, const std::string& ai, bool troupe)
     ImGui::Dummy(ImVec2(r * 2.0f + 6.0f * scale, ImGui::GetTextLineHeight()));
     ImGui::SameLine();
     ImGui::TextColored(p.color, "%s", p.name);
-    DrawPresenceMenu(ai, "chat", p.name, chat);
-
-    if (channel)
-    {
-        const bool overridden = channel->aiLevels.count(ai) > 0;
-        const std::string current = overridden ? ModelLevelLabel(channel->LevelFor(ai))
-                                               : std::string("Salon (") + ModelLevelLabel(channel->level) + ")";
-        ImGui::SameLine(ImGui::GetContentRegionMax().x - 115.0f * scale);
-        ImGui::SetNextItemWidth(115.0f * scale);
-        const ModelChoice choice = m_settings.Choice(ai, channel->LevelFor(ai));
-        if (ImGui::BeginCombo("##aiLevel", current.c_str()))
-        {
-            if (ImGui::Selectable("Niveau du salon", !overridden))
-                m_store.SetAiLevel(*channel, ai, nullptr);
-            ImGui::Separator();
-            for (ModelLevel level : kLevels)
-                if (ImGui::Selectable(ModelLevelLabel(level), overridden && channel->LevelFor(ai) == level))
-                    m_store.SetAiLevel(*channel, ai, &level);
-            ImGui::EndCombo();
-        }
-        ImGui::SetItemTooltip("Modèle : %s  ·  réflexion : %s", choice.model.c_str(), choice.thinking.c_str());
-    }
 
     const float indent = r * 2.0f + 6.0f * scale + ImGui::GetStyle().ItemSpacing.x;
     ImGui::Indent(indent);
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextColored(PresenceColor(chat.state), "%s", PresenceText(chat, true).c_str());
-    if (ImGui::SmallButton("PM / tâches"))
-        OpenTodo(ai);
     if (!troupe)
         if (const char* twin = CodeTwinOf(ai))
         {
@@ -1330,18 +1320,14 @@ void App::DrawMemberRow(Channel* channel, const std::string& ai, bool troupe)
             const bool working = m_codeWorker.IsRunning(ai);
             const ImVec4 color = working ? kColAccent : code.state == PresenceState::NotConnected ? kColDim : PresenceColor(code.state);
             ImGui::TextColored(color, "%s : %s", twin, working ? "travaille…" : PresenceText(code, false).c_str());
-            DrawPresenceMenu(ai, "code", twin, code);
             ImGui::PopID();
         }
     if (channel)
     {
         const auto role = channel->roles.find(ai);
         const std::string roleLabel = role != channel->roles.end() ? "rôle : " + role->second.name : "rôle : aucun";
-        ImGui::PushStyleColor(ImGuiCol_Text, role != channel->roles.end() && role->second.isLead ? kColWarn : kColDim);
-        if (ImGui::Selectable(roleLabel.c_str(), false))
-            ImGui::OpenPopup("##role");
-        ImGui::PopStyleColor();
-        DrawRoleMenu(*channel, ai);
+        ImGui::TextColored(role != channel->roles.end() && role->second.isLead ? kColWarn : kColDim,
+                           "%s", roleLabel.c_str());
     }
     ImGui::PopTextWrapPos();
     ImGui::Unindent(indent);
@@ -2063,12 +2049,12 @@ void App::DrawEditSourcesPopup()
 {
     if (m_openEditSources)
     {
-        ImGui::OpenPopup("Sources du sous-serveur");
+        ImGui::OpenPopup("Options du sous-serveur");
         m_openEditSources = false;
     }
     const float scale = ImGui::GetStyle().FontScaleDpi;
     ImGui::SetNextWindowSize(ImVec2(560.0f * scale, 0.0f));
-    if (!ImGui::BeginPopupModal("Sources du sous-serveur", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (!ImGui::BeginPopupModal("Options du sous-serveur", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         return;
     Subserver* sub = m_store.FindSubserver(m_selectedSubserver);
     if (!sub)
@@ -2077,12 +2063,17 @@ void App::DrawEditSourcesPopup()
         ImGui::EndPopup();
         return;
     }
+    ImGui::TextUnformatted("Nom");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputText("##serverName", &m_renameText);
+    ImGui::SeparatorText("Sources partagées");
     bool valid = FolderField("Vault Obsidian", m_editVault, L"Choisir le vault Obsidian");
     valid = FolderField("Dossier lore", m_editLore, L"Choisir le dossier lore") && valid;
     valid = FolderField("Dossier de code", m_editCode, L"Choisir le dossier de code") && valid;
-    ImGui::BeginDisabled(!valid);
+    ImGui::BeginDisabled(!valid || Trim(m_renameText).empty());
     if (ImGui::Button("Enregistrer"))
     {
+        m_store.RenameSubserver(*sub, Trim(m_renameText));
         m_store.UpdateSources(*sub, Trim(m_editVault), Trim(m_editLore), Trim(m_editCode));
         ImGui::CloseCurrentPopup();
     }
@@ -2291,6 +2282,124 @@ void App::DrawOptionsWindow()
             ImGui::EndTabBar();
         }
     }
+    ImGui::End();
+}
+
+void App::DrawChatOptionsWindow()
+{
+    if (!m_showChatOptions)
+        return;
+    const float scale = ImGui::GetStyle().FontScaleDpi;
+    ImGui::SetNextWindowSize(ImVec2(760.0f * scale, 540.0f * scale), ImGuiCond_FirstUseEver);
+    if (m_focusChatOptions)
+    {
+        ImGui::SetNextWindowFocus();
+        m_focusChatOptions = false;
+    }
+    if (!ImGui::Begin("Options du chat", &m_showChatOptions, ImGuiWindowFlags_NoCollapse))
+    {
+        ImGui::End();
+        return;
+    }
+
+    Subserver* sub = m_store.FindSubserver(m_selectedSubserver);
+    Channel* channel = sub ? m_store.FindChannel(*sub, m_selectedChannel) : nullptr;
+    if (!sub || !channel)
+    {
+        ImGui::TextColored(kColDim, "Sélectionne un salon pour régler ses participants.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("# %s", channel->name.c_str());
+    ImGui::SameLine();
+    ImGui::TextColored(kColDim, "· %s · %s", ChannelTypeLabel(channel->type), sub->name.c_str());
+    ImGui::Separator();
+
+    const float tabsWidth = 150.0f * scale;
+    ImGui::BeginChild("##aiTabs", ImVec2(tabsWidth, 0), ImGuiChildFlags_Borders);
+    ImGui::TextColored(kColDim, "AGENTS");
+    for (const char* ai : {"chatgpt", "claude", "gemini", "mistral", "deepseek", "grok"})
+    {
+        const Presence presence = m_settings.GetPresence(ai, "chat");
+        ImGui::PushID(ai);
+        ImGui::TextColored(PresenceColor(presence.state), "●");
+        ImGui::SameLine();
+        if (ImGui::Selectable(AiDisplayName(ai), m_chatOptionsAi == ai))
+            m_chatOptionsAi = ai;
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##aiOptions", ImVec2(0, 0),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
+
+    const std::string ai = m_chatOptionsAi;
+    const Participant& participant = ParticipantFor(ai);
+    ImGui::TextColored(participant.color, "%s", participant.name);
+    ImGui::SameLine();
+    if (ImGui::Button("PM / tâches"))
+        OpenTodo(ai);
+
+    auto presenceControl = [&](const char* tier, const char* title) {
+        ImGui::PushID(tier);
+        const Presence presence = m_settings.GetPresence(ai, tier);
+        ImGui::TextUnformatted(title);
+        ImGui::SameLine();
+        ImGui::TextColored(PresenceColor(presence.state), "%s", PresenceText(presence, true).c_str());
+        if (presence.state == PresenceState::Offline)
+        {
+            if (ImGui::Button("Remettre en ligne"))
+                m_settings.PutBackOnline(ai, tier);
+        }
+        else
+        {
+            ImGui::BeginDisabled(presence.state == PresenceState::NotConnected);
+            if (ImGui::Button("Mettre en pause"))
+                m_settings.SetPresence(ai, tier, {PresenceState::Offline, "pause manuelle", ""});
+            ImGui::EndDisabled();
+        }
+        ImGui::PopID();
+    };
+
+    ImGui::Spacing();
+    presenceControl("chat", "Conversation :");
+    if (CodeTwinOf(ai))
+    {
+        ImGui::Spacing();
+        presenceControl("code", "Agent de code :");
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Niveau dans ce salon");
+    const bool overridden = channel->aiLevels.count(ai) > 0;
+    const std::string current = overridden ? ModelLevelLabel(channel->LevelFor(ai))
+                                           : std::string("Niveau du salon (") + ModelLevelLabel(channel->level) + ")";
+    ImGui::SetNextItemWidth(230.0f * scale);
+    if (ImGui::BeginCombo("##chatAiLevel", current.c_str()))
+    {
+        if (ImGui::Selectable("Niveau du salon", !overridden))
+            m_store.SetAiLevel(*channel, ai, nullptr);
+        ImGui::Separator();
+        for (ModelLevel level : kLevels)
+            if (ImGui::Selectable(ModelLevelLabel(level), overridden && channel->LevelFor(ai) == level))
+                m_store.SetAiLevel(*channel, ai, &level);
+        ImGui::EndCombo();
+    }
+    const ModelChoice choice = m_settings.Choice(ai, channel->LevelFor(ai));
+    ImGui::TextColored(kColDim, "Modèle : %s · réflexion : %s", choice.model.c_str(), choice.thinking.c_str());
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Rôle dans ce salon");
+    const auto role = channel->roles.find(ai);
+    ImGui::TextWrapped("%s", role != channel->roles.end() ? role->second.name.c_str() : "Aucun rôle");
+    if (role != channel->roles.end() && !role->second.instructions.empty())
+        ImGui::TextColored(kColDim, "%s", role->second.instructions.c_str());
+    if (ImGui::Button("Modifier le rôle"))
+        ImGui::OpenPopup("##role");
+    DrawRoleMenu(*channel, ai);
+
+    ImGui::EndChild();
     ImGui::End();
 }
 
