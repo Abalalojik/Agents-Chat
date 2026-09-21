@@ -49,6 +49,16 @@ bool Settings::Load()
                 continue;
             m_offline[key] = {PresenceState::Offline, p.value("reason", ""), p.value("until", "")};
         }
+        const json overrides = doc.value("presenceOverrides", json::object());
+        for (const auto& [key, p] : overrides.items())
+        {
+            if (!p.is_object())
+                continue;
+            const std::string state = p.value("state", "");
+            if (state == "online" || state == "offline")
+                m_offline[key] = {state == "online" ? PresenceState::Online : PresenceState::Offline,
+                                  p.value("reason", ""), p.value("until", "")};
+        }
         return true;
     }
     catch (const std::exception& e)
@@ -91,19 +101,23 @@ Presence Settings::GetPresence(const std::string& aiId, const std::string& tier)
     if (it != m_offline.end())
     {
         // ISO 8601 UTC strings of the same shape compare in time order.
-        if (it->second.untilIso.empty() || Platform::NowIsoUtc() < it->second.untilIso)
+        if (it->second.state == PresenceState::Online || it->second.untilIso.empty() ||
+            Platform::NowIsoUtc() < it->second.untilIso)
             return it->second;
         m_offline.erase(it); // the announced date has passed
         Save();
     }
-    return {IsAvailable(aiId, tier) ? PresenceState::Online : PresenceState::NotConnected, "", ""};
+    const auto detected = m_detected.find(key);
+    if (detected != m_detected.end())
+        return detected->second;
+    return {IsAvailable(aiId, tier) ? PresenceState::Unknown : PresenceState::NotConnected, "", ""};
 }
 
 bool Settings::SetPresence(const std::string& aiId, const std::string& tier, const Presence& presence)
 {
     const auto previous = m_offline;
     const std::string key = aiId + "/" + tier;
-    if (presence.state == PresenceState::Offline)
+    if (presence.state == PresenceState::Offline || presence.state == PresenceState::Online)
         m_offline[key] = presence;
     else
         m_offline.erase(key);
@@ -117,7 +131,24 @@ bool Settings::SetPresence(const std::string& aiId, const std::string& tier, con
 
 bool Settings::PutBackOnline(const std::string& aiId, const std::string& tier)
 {
-    return SetPresence(aiId, tier, {PresenceState::Online, "", ""});
+    return SetPresence(aiId, tier, {PresenceState::Online, "forcé manuellement", ""});
+}
+
+bool Settings::UseDetectedPresence(const std::string& aiId, const std::string& tier)
+{
+    const auto previous = m_offline;
+    m_offline.erase(aiId + "/" + tier);
+    if (!Save())
+    {
+        m_offline = previous;
+        return false;
+    }
+    return true;
+}
+
+bool Settings::HasPresenceOverride(const std::string& aiId, const std::string& tier) const
+{
+    return m_offline.count(aiId + "/" + tier) > 0;
 }
 
 std::string Settings::ApiKey(const std::string& provider) const
@@ -154,6 +185,12 @@ bool Settings::SetApiKey(const std::string& provider, const std::string& plainKe
 void Settings::SetAvailable(const std::string& aiId, const std::string& tier, bool available)
 {
     m_available[aiId + "/" + tier] = available;
+}
+
+void Settings::SetDetectedPresence(const std::string& aiId, const std::string& tier, const Presence& presence)
+{
+    m_detected[aiId + "/" + tier] = presence;
+    m_available[aiId + "/" + tier] = PresenceCanWork(presence.state);
 }
 
 bool Settings::IsAvailable(const std::string& aiId, const std::string& tier) const
@@ -204,13 +241,20 @@ bool Settings::Save()
     for (const auto& [aiId, levels] : m_models)
         for (const auto& [levelKey, choice] : levels)
             models[aiId][levelKey] = {{"model", choice.model}, {"thinking", choice.thinking}};
-    json offline = json::object();
+    json offline = json::object(); // kept for backward compatibility with older builds
+    json presenceOverrides = json::object();
     for (const auto& [key, p] : m_offline)
-        offline[key] = {{"reason", p.reason}, {"until", p.untilIso}};
+    {
+        if (p.state == PresenceState::Offline)
+            offline[key] = {{"reason", p.reason}, {"until", p.untilIso}};
+        presenceOverrides[key] = {{"state", p.state == PresenceState::Online ? "online" : "offline"},
+                                  {"reason", p.reason}, {"until", p.untilIso}};
+    }
     json keys = json::object();
     for (const auto& [provider, protectedKey] : m_apiKeys)
         keys[provider] = protectedKey;
-    const json doc = {{"version", 1}, {"models", models}, {"offline", offline}, {"apiKeys", keys},
+    const json doc = {{"version", 1}, {"models", models}, {"offline", offline},
+                      {"presenceOverrides", presenceOverrides}, {"apiKeys", keys},
                       {"userName", m_userName}, {"maxTurns", m_maxTurns}, {"allowedCommands", m_allowedCommands}};
 
     std::string error;

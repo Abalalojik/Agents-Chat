@@ -85,6 +85,12 @@ struct LoginStatus
 {
     bool known = false;
     bool loggedIn = false;
+    bool planActive = false;
+    bool quotaKnown = false;
+    bool quotaAvailable = false;
+    double remainingPercent = -1.0;
+    std::string plan;
+    std::string resetsAt;
     std::string detail;
 };
 LoginStatus CheckLogin(const std::string& aiId);

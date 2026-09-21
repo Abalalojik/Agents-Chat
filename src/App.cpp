@@ -152,6 +152,9 @@ namespace
         switch (state)
         {
         case PresenceState::Online: return kColOk;
+        case PresenceState::Unknown: return kColWarn;
+        case PresenceState::Limited: return kColWarn;
+        case PresenceState::Exhausted: return kColError;
         case PresenceState::Offline: return kColError;
         case PresenceState::NotConnected: break;
         }
@@ -162,7 +165,19 @@ namespace
     {
         switch (presence.state)
         {
-        case PresenceState::Online: return "en ligne";
+        case PresenceState::Online:
+            return presence.reason.empty() ? "en ligne" : "en ligne (" + presence.reason + ")";
+        case PresenceState::Unknown:
+            return presence.reason.empty() ? "forfait détecté · quota inconnu" : presence.reason;
+        case PresenceState::Limited:
+            return presence.reason.empty() ? "limité · crédits" : presence.reason;
+        case PresenceState::Exhausted:
+        {
+            std::string text = presence.reason.empty() ? "quota épuisé" : presence.reason;
+            if (!presence.untilIso.empty())
+                text += " · retour " + Platform::LocalWhen(presence.untilIso);
+            return text;
+        }
         case PresenceState::NotConnected: return feminine ? "non branchée" : "non branché";
         case PresenceState::Offline: break;
         }
@@ -287,6 +302,10 @@ void App::RefreshAvailability()
             const LoginStatus s = CheckLogin("claude");
             a.claude = s.loggedIn;
             a.claudeDetail = s.detail;
+            a.claudePresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
+                                                               : PresenceState::Unknown)
+                                             : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
+                                s.detail, s.resetsAt};
         }
         else
             a.claudeDetail = "non installé";
@@ -295,6 +314,10 @@ void App::RefreshAvailability()
             const LoginStatus s = CheckLogin("chatgpt");
             a.codex = s.loggedIn;
             a.codexDetail = s.detail;
+            a.codexPresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
+                                                              : PresenceState::Unknown)
+                                            : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
+                               s.detail, s.resetsAt};
         }
         else
             a.codexDetail = "non installé";
@@ -303,6 +326,10 @@ void App::RefreshAvailability()
             const LoginStatus s = CheckLogin("gemini");
             a.gemini = s.loggedIn;
             a.geminiDetail = s.detail;
+            a.geminiPresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
+                                                               : PresenceState::Unknown)
+                                             : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
+                                s.detail, s.resetsAt};
         }
         else
             a.geminiDetail = "non installé";
@@ -324,25 +351,40 @@ void App::ApplyAvailability()
     }
     m_settings.SetAvailable("claude", "chat", a.claude);
     m_settings.SetAvailable("claude", "code", a.claude);
+    m_settings.SetDetectedPresence("claude", "chat", a.claudePresence);
+    m_settings.SetDetectedPresence("claude", "code", a.claudePresence);
     m_settings.SetAvailable("chatgpt", "chat", a.codex);
     m_settings.SetAvailable("chatgpt", "code", a.codex);
-    m_settings.SetAvailable("gemini", "chat", a.gemini || m_settings.HasApiKey(Provider::GeminiApi));
+    m_settings.SetDetectedPresence("chatgpt", "chat", a.codexPresence);
+    m_settings.SetDetectedPresence("chatgpt", "code", a.codexPresence);
+    const bool geminiApi = m_settings.HasApiKey(Provider::GeminiApi);
+    m_settings.SetAvailable("gemini", "chat", a.gemini || geminiApi);
     // Antigravity is the research specialist. Code execution belongs to Codex;
     // keeping this tier disabled also prevents legacy Gemini CLI arguments from
     // being sent accidentally to agy.exe.
     m_settings.SetAvailable("gemini", "code", false);
     m_settings.SetAvailable("gemini", "cli", a.gemini);
-    m_settings.SetAvailable("gemini", "api", m_settings.HasApiKey(Provider::GeminiApi));
-    m_settings.SetAvailable("mistral", "chat", m_settings.HasApiKey(Provider::Mistral));
-    m_settings.SetAvailable("deepseek", "chat",
-                            m_settings.HasApiKey(Provider::DeepSeek) || m_settings.HasApiKey(Provider::OpenRouter));
-    m_settings.SetAvailable("grok", "chat", m_settings.HasApiKey(Provider::XAI));
+    m_settings.SetDetectedPresence("gemini", "chat", a.gemini ? a.geminiPresence
+                                                               : (geminiApi ? Presence{PresenceState::Limited, "limité · crédits API Google", ""}
+                                                                            : Presence{}));
+    m_settings.SetDetectedPresence("gemini", "cli", a.geminiPresence);
+    m_settings.SetDetectedPresence("gemini", "api", geminiApi ? Presence{PresenceState::Limited, "limité · crédits API Google", ""}
+                                                               : Presence{});
+    auto apiCredits = [&](const char* ai, bool configured, const char* provider) {
+        m_settings.SetDetectedPresence(ai, "chat", configured
+            ? Presence{PresenceState::Limited, std::string("limité · crédits API ") + provider, ""}
+            : Presence{});
+    };
+    apiCredits("mistral", m_settings.HasApiKey(Provider::Mistral), "Mistral");
+    apiCredits("deepseek", m_settings.HasApiKey(Provider::DeepSeek) || m_settings.HasApiKey(Provider::OpenRouter), "DeepSeek/OpenRouter");
+    apiCredits("grok", m_settings.HasApiKey(Provider::XAI), "xAI");
 }
 
 std::vector<std::string> App::SalonMembers(const Channel& channel, bool forDefaultSpeakers) const
 {
     auto online = [&](const std::string& ai) {
-        return const_cast<Settings&>(m_settings).GetPresence(ai, "chat").state == PresenceState::Online;
+        return channel.roles.count(ai) > 0 &&
+               PresenceCanWork(const_cast<Settings&>(m_settings).GetPresence(ai, "chat").state);
     };
     std::vector<std::string> out;
     if (channel.type == ChannelType::Detente)
@@ -753,7 +795,11 @@ void App::DrawChannelView(Subserver& subserver, Channel& channel, float width, f
     ImGui::Text("# %s", channel.name.c_str());
     ImGui::SameLine();
     ImGui::TextColored(kColDim, "·  %s  ·  %s", ChannelTypeLabel(channel.type), subserver.name.c_str());
-    const float headerButtons = 195.0f * scale;
+    const char* membersLabel = m_showMembers ? "Masquer membres" : "Membres";
+    const float headerButtons = ImGui::CalcTextSize("Options du chat").x +
+                                ImGui::CalcTextSize(membersLabel).x +
+                                ImGui::GetStyle().FramePadding.x * 4.0f +
+                                ImGui::GetStyle().ItemSpacing.x;
     if (ImGui::GetCursorPosX() < ImGui::GetContentRegionMax().x - headerButtons)
         ImGui::SameLine(ImGui::GetContentRegionMax().x - headerButtons);
     else
@@ -765,7 +811,7 @@ void App::DrawChannelView(Subserver& subserver, Channel& channel, float width, f
         m_focusChatOptions = true;
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton(m_showMembers ? "Masquer membres" : "Membres"))
+    if (ImGui::SmallButton(membersLabel))
         m_showMembers = !m_showMembers;
     ImGui::Separator();
 
@@ -1158,7 +1204,7 @@ void App::LaunchCodeWork(const InboxItem& item)
     Channel* ch = sub ? m_store.FindChannel(*sub, item.channelId) : nullptr;
     if (!sub || !ch || args.is_discarded())
         return;
-    if (m_settings.GetPresence(item.ai, "code").state != PresenceState::Online)
+    if (!PresenceCanWork(m_settings.GetPresence(item.ai, "code").state))
     {
         m_store.DecideInboxItem(item.id, "refuse", "agent de code hors ligne");
         PostSystem(item.subserverId, item.channelId,
@@ -1233,13 +1279,19 @@ void App::DrawPresenceMenu(const std::string& aiId, const char* tier, const char
         return;
     ImGui::TextColored(kColDim, "%s", label);
     ImGui::Separator();
-    if (presence.state == PresenceState::Offline)
+    if (!PresenceCanWork(presence.state))
     {
-        if (ImGui::MenuItem("Remettre en ligne"))
+        if (ImGui::MenuItem("Forcer en ligne"))
             m_settings.PutBackOnline(aiId, tier);
     }
     else if (ImGui::MenuItem("Mettre hors ligne (pause)"))
         m_settings.SetPresence(aiId, tier, {PresenceState::Offline, "pause manuelle", ""});
+    if (m_settings.HasPresenceOverride(aiId, tier))
+    {
+        ImGui::Separator();
+        if (ImGui::MenuItem("Revenir au statut automatique"))
+            m_settings.UseDetectedPresence(aiId, tier);
+    }
     ImGui::EndPopup();
 }
 
@@ -1332,13 +1384,15 @@ void App::DrawMembersColumn(float height)
         ImGui::Spacing();
     }
     for (const char* ai : kPlanAis)
-        DrawMemberRow(channel, ai, false);
+        if (channel && channel->roles.count(ai) > 0)
+            DrawMemberRow(channel, ai, false);
 
     const bool detente = channel && channel->type == ChannelType::Detente;
     ImGui::TextColored(kColDim, detente ? "TROUPE GRATUITE" : "TROUPE GRATUITE (salons Détente)");
     ImGui::Spacing();
     for (const char* ai : {"mistral", "deepseek", "grok"})
-        DrawMemberRow(detente ? channel : nullptr, ai, true);
+        if (detente && channel->roles.count(ai) > 0)
+            DrawMemberRow(channel, ai, true);
 
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -2433,10 +2487,16 @@ void App::DrawChatOptionsWindow()
         ImGui::TextUnformatted(title);
         ImGui::SameLine();
         ImGui::TextColored(PresenceColor(presence.state), "%s", PresenceText(presence, true).c_str());
-        if (presence.state == PresenceState::Offline)
+        if (!PresenceCanWork(presence.state))
         {
-            if (ImGui::Button("Remettre en ligne"))
+            if (ImGui::Button("Forcer en ligne"))
                 m_settings.PutBackOnline(ai, tier);
+        }
+        if (m_settings.HasPresenceOverride(ai, tier))
+        {
+            ImGui::SameLine();
+            if (ImGui::Button("Auto"))
+                m_settings.UseDetectedPresence(ai, tier);
         }
         else
         {

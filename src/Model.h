@@ -151,9 +151,17 @@ struct Message
 enum class PresenceState
 {
     NotConnected, // not installed / not signed in / no API key
+    Unknown,      // authenticated plan, but the provider exposes no headless quota counter
     Online,
-    Offline,
+    Limited,      // no plan, but paid/prepaid API credits are available
+    Exhausted,    // plan exists, but its current quota window is exhausted
+    Offline,      // authenticated, but neither a plan nor credits are available (or manual pause)
 };
+
+inline bool PresenceCanWork(PresenceState state)
+{
+    return state == PresenceState::Online || state == PresenceState::Unknown || state == PresenceState::Limited;
+}
 
 struct Presence
 {

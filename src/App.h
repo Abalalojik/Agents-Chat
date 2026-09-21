@@ -103,6 +103,7 @@ private:
     struct Availability
     {
         bool claude = false, codex = false, gemini = false;
+        Presence claudePresence, codexPresence, geminiPresence;
         std::string claudeDetail, codexDetail, geminiDetail;
         std::string claudePath, codexPath, geminiPath;
     };

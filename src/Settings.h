@@ -22,11 +22,14 @@ public:
     // date has passed ends by itself here (back online, saved).
     Presence GetPresence(const std::string& aiId, const std::string& tier);
     bool SetPresence(const std::string& aiId, const std::string& tier, const Presence& presence);
-    // Clears an offline state: the AI goes back to its normal state.
+    // Manual overrides take precedence over provider detection.
     bool PutBackOnline(const std::string& aiId, const std::string& tier);
+    bool UseDetectedPresence(const std::string& aiId, const std::string& tier);
+    bool HasPresenceOverride(const std::string& aiId, const std::string& tier) const;
     // Whether a backend exists for this AI/tier (installed + signed in, or API key).
     // Not saved: detected at start-up and after sign-in.
     void SetAvailable(const std::string& aiId, const std::string& tier, bool available);
+    void SetDetectedPresence(const std::string& aiId, const std::string& tier, const Presence& presence);
     bool IsAvailable(const std::string& aiId, const std::string& tier) const;
 
     // How the AIs address the user ("" = "l'utilisatrice").
@@ -52,11 +55,11 @@ private:
     std::filesystem::path m_file;
     // aiId -> level key -> choice (only entries the user changed or loaded)
     std::map<std::string, std::map<std::string, ModelChoice>> m_models;
-    // "aiId/tier" -> offline state (only offline states are stored; online is the default
-    // once a backend exists, "not connected" until then)
+    // "aiId/tier" -> persistent manual Online/Offline override.
     std::map<std::string, Presence> m_offline;
     std::map<std::string, std::string> m_apiKeys; // provider -> DPAPI-protected base64
     std::map<std::string, bool> m_available;      // "aiId/tier" -> backend present
+    std::map<std::string, Presence> m_detected;   // live account/quota state; never persisted
     std::string m_userName;
     int m_maxTurns = 8;
     std::string m_allowedCommands;

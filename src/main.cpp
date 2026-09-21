@@ -10,12 +10,14 @@
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
+#include <nlohmann/json.hpp>
 
 #include <d3d11.h>
 #include <windows.h>
 #include <shellapi.h>
 
 #include <filesystem>
+#include <iostream>
 #include <string>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -136,7 +138,25 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     const bool scheduledSync = argc > 1 && std::wstring(argv[1]) == L"--sync-cloud";
+    const bool captureAntigravity = argc > 1 && std::wstring(argv[1]) == L"--capture-antigravity-status";
     if (argv) LocalFree(argv);
+    if (captureAntigravity)
+    {
+        std::string payload((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
+        if (!payload.empty())
+        {
+            try
+            {
+                nlohmann::json state = nlohmann::json::parse(payload);
+                state["agents_chat_captured_at"] = Platform::NowIsoUtc();
+                std::string error;
+                Platform::WriteFileAtomic(Platform::DataRoot() / "antigravity-status.json", state.dump(2), error);
+            }
+            catch (...) {}
+        }
+        std::cout << "Agents Chat" << std::endl;
+        return 0;
+    }
     if (scheduledSync)
     {
         CloudSync cloud(Platform::DataRoot());

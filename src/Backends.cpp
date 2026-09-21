@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <map>
 
 using nlohmann::json;
@@ -17,6 +18,8 @@ namespace fs = std::filesystem;
 
 namespace
 {
+    std::wstring EnvPath(const wchar_t* name);
+
     std::string Lower(std::string s)
     {
         std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -103,6 +106,88 @@ namespace
     {
         return agent.found && agent.script.empty() &&
                Lower(Platform::Narrow(fs::path(agent.exe).filename().wstring())) == "agy.exe";
+    }
+
+    void EnsureAntigravityStatusHook()
+    {
+        const fs::path settings = fs::path(EnvPath(L"USERPROFILE")) / L".gemini" / L"antigravity-cli" / L"settings.json";
+        json value = json::object();
+        try
+        {
+            std::ifstream in(settings, std::ios::binary);
+            if (in) in >> value;
+        }
+        catch (...) { return; }
+        wchar_t exe[32768];
+        const DWORD n = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
+        if (!n || n >= std::size(exe))
+            return;
+        const std::wstring executable(exe, n);
+        if (Lower(Platform::Narrow(fs::path(executable).filename().wstring())) != "agentchats.exe")
+            return; // connection tests must never register themselves as the collector
+        if (value.contains("statusLine"))
+        {
+            const std::string existing = value["statusLine"].value("command", std::string());
+            if (existing.find("--capture-antigravity-status") == std::string::npos)
+                return; // never replace a user-owned status line
+        }
+        value["statusLine"] = {
+            {"type", "command"},
+            {"command", "\"" + Platform::Narrow(executable) + "\" --capture-antigravity-status"},
+            {"enabled", true},
+            {"stack_with_default", true}
+        };
+        std::error_code ec;
+        fs::create_directories(settings.parent_path(), ec);
+        std::string error;
+        Platform::WriteFileAtomic(settings, value.dump(2), error);
+    }
+
+    bool ReadAntigravityQuota(LoginStatus& s)
+    {
+        try
+        {
+            std::ifstream in(Platform::DataRoot() / "antigravity-status.json", std::ios::binary);
+            if (!in) return false;
+            json value;
+            in >> value;
+            s.plan = value.value("plan_tier", std::string());
+            if (s.plan.empty() || !value.contains("quota") || !value["quota"].is_object())
+                return false;
+            s.planActive = true;
+            s.quotaKnown = !value["quota"].empty();
+            s.quotaAvailable = true;
+            double remaining = 100.0;
+            long long longestReset = 0;
+            for (const auto& [_, quota] : value["quota"].items())
+                if (quota.is_object() && quota.contains("remaining_fraction"))
+                {
+                    const double percent = std::clamp(quota.value("remaining_fraction", 0.0) * 100.0, 0.0, 100.0);
+                    remaining = std::min(remaining, percent);
+                    if (percent <= 0.0)
+                    {
+                        s.quotaAvailable = false;
+                        longestReset = std::max(longestReset, quota.value("reset_in_seconds", 0LL));
+                        if (quota.contains("reset_time") && quota["reset_time"].is_string())
+                            s.resetsAt = quota["reset_time"].get<std::string>();
+                    }
+                }
+            if (!s.quotaKnown) return false;
+            if (!s.quotaAvailable && s.resetsAt.empty() && longestReset > 0)
+                s.resetsAt = IsoInSeconds(longestReset);
+            if (!s.quotaAvailable && !s.resetsAt.empty() && s.resetsAt <= Platform::NowIsoUtc())
+            {
+                s.quotaKnown = false;
+                s.resetsAt.clear();
+                return false;
+            }
+            s.remainingPercent = remaining;
+            s.detail = s.quotaAvailable ? "forfait Antigravity " + s.plan + " · " +
+                                           std::to_string(static_cast<int>(remaining + 0.5)) + "% disponible"
+                                        : "quota Antigravity épuisé";
+            return true;
+        }
+        catch (...) { return false; }
     }
 
     std::string AntigravityModel(const std::string& configured)
@@ -959,7 +1044,10 @@ LoginStatus CheckLogin(const std::string& aiId)
             const json j = json::parse(out);
             s.known = true;
             s.loggedIn = j.value("loggedIn", false);
-            s.detail = s.loggedIn ? "connectée (" + j.value("authMethod", std::string("?")) + ")" : "non connectée";
+            s.plan = j.value("subscriptionType", std::string());
+            s.planActive = s.loggedIn && j.value("authMethod", std::string()) == "claude.ai" && !s.plan.empty();
+            s.detail = s.planActive ? "forfait Claude " + s.plan + " · quota inconnu"
+                                    : (s.loggedIn ? "compte Claude connecté sans forfait détecté" : "non connectée");
         }
         catch (...)
         {
@@ -971,21 +1059,79 @@ LoginStatus CheckLogin(const std::string& aiId)
         const AgentInstall a = FindCodex();
         if (!a.found)
             return s;
+        const std::string rpc =
+            "{\"method\":\"initialize\",\"id\":0,\"params\":{\"clientInfo\":{\"name\":\"agents_chat\",\"title\":\"Agents Chat\",\"version\":\"0.1\"}}}\n"
+            "{\"method\":\"initialized\",\"params\":{}}\n"
+            "{\"method\":\"account/read\",\"id\":1,\"params\":{\"refreshToken\":false}}\n"
+            "{\"method\":\"account/rateLimits/read\",\"id\":2}\n";
+        json account, limits;
+        const Process::Result appServer = Process::Run({a.exe, L"app-server", L"--stdio"}, L"", rpc,
+            [&](const std::string& line) {
+                try
+                {
+                    const json message = json::parse(line);
+                    if (message.value("id", -1) == 1 && message.contains("result")) account = message["result"];
+                    if (message.value("id", -1) == 2 && message.contains("result")) limits = message["result"];
+                }
+                catch (...) {}
+            }, noCancel, kCodexEnv, 20);
+        if (account.contains("account") && account["account"].is_object())
+        {
+            const json& acc = account["account"];
+            s.known = true;
+            s.loggedIn = true;
+            s.plan = acc.value("planType", std::string());
+            s.planActive = acc.value("type", std::string()) == "chatgpt" && !s.plan.empty();
+            if (limits.contains("rateLimits") && limits["rateLimits"].is_object())
+            {
+                const json& rate = limits["rateLimits"];
+                s.quotaKnown = true;
+                s.quotaAvailable = rate.value("rateLimitReachedType", std::string()).empty();
+                double remaining = 100.0;
+                long long reset = 0;
+                for (const char* window : {"primary", "secondary"})
+                    if (rate.contains(window) && rate[window].is_object())
+                    {
+                        const double used = rate[window].value("usedPercent", 0.0);
+                        remaining = std::min(remaining, std::max(0.0, 100.0 - used));
+                        if (used >= 100.0)
+                        {
+                            s.quotaAvailable = false;
+                            reset = std::max(reset, rate[window].value("resetsAt", 0LL));
+                        }
+                    }
+                s.remainingPercent = remaining;
+                if (reset > 0) s.resetsAt = IsoFromEpoch(reset);
+                const int rounded = static_cast<int>(remaining + 0.5);
+                s.detail = s.quotaAvailable ? "forfait ChatGPT " + s.plan + " · " + std::to_string(rounded) + "% disponible"
+                                            : "quota Codex épuisé";
+            }
+            else
+                s.detail = "forfait ChatGPT " + s.plan + " · quota inconnu";
+            return s;
+        }
+
+        out.clear();
         const Process::Result p = Process::Run({a.exe, L"login", L"status"}, L"", "", collect, noCancel, kCodexEnv);
-        const std::string all = out + p.stderrText;
+        const std::string all = out + p.stderrText + appServer.stderrText;
         s.known = true;
         s.loggedIn = Lower(all).find("logged in") != std::string::npos && Lower(all).find("not logged") == std::string::npos;
-        s.detail = s.loggedIn ? "connectée (ChatGPT)" : "non connectée";
+        s.planActive = s.loggedIn;
+        s.detail = s.loggedIn ? "compte ChatGPT connecté · forfait et quota inconnus" : "non connectée";
     }
     else if (aiId == "gemini")
     {
         const AgentInstall agent = FindGemini();
         if (IsAntigravity(agent))
         {
+            EnsureAntigravityStatusHook();
             const Process::Result p = Process::Run({agent.exe, L"models"}, L"", "", collect, noCancel, {}, 60);
             s.known = true;
             s.loggedIn = p.started && p.exitCode == 0 && !out.empty();
-            s.detail = s.loggedIn ? "connectée (Antigravity CLI)" : "Antigravity CLI non connecté";
+            s.planActive = s.loggedIn;
+            s.detail = s.loggedIn ? "forfait Antigravity détecté · quota inconnu" : "Antigravity CLI non connecté";
+            if (s.loggedIn)
+                ReadAntigravityQuota(s);
             return s;
         }
         // Legacy Gemini CLI has no status command: inspect its selected method.
@@ -1020,6 +1166,7 @@ LoginStatus CheckLogin(const std::string& aiId)
             else
             {
                 s.loggedIn = !type.empty();
+                s.planActive = false;
                 s.detail = s.loggedIn ? "méthode : " + type : "non connectée";
             }
         }

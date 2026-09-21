@@ -4,6 +4,7 @@
 
 #include "../src/Conductor.h"
 #include "../src/Platform.h"
+#include "../src/Settings.h"
 #include "../src/Store.h"
 #include "../src/Tools.h"
 
@@ -31,8 +32,10 @@ int main(int argc, char** argv)
         for (const std::string ai : {"claude", "chatgpt", "gemini"})
         {
             const LoginStatus status = CheckLogin(ai);
-            std::printf("%s: known=%s loggedIn=%s detail=%s\n", ai.c_str(), status.known ? "true" : "false",
-                        status.loggedIn ? "true" : "false", status.detail.c_str());
+            std::printf("%s: known=%s loggedIn=%s planActive=%s quotaKnown=%s quotaAvailable=%s plan=%s detail=%s\n",
+                        ai.c_str(), status.known ? "true" : "false", status.loggedIn ? "true" : "false",
+                        status.planActive ? "true" : "false", status.quotaKnown ? "true" : "false",
+                        status.quotaAvailable ? "true" : "false", status.plan.c_str(), status.detail.c_str());
         }
         return 0;
     }
@@ -64,6 +67,31 @@ int main(int argc, char** argv)
         return failures == 0 ? 0 : 1;
     }
     CHECK(!Platform::ProjectRoot().empty());
+    // A visible but exhausted/disconnected agent must never receive work.
+    CHECK(PresenceCanWork(PresenceState::Online));
+    CHECK(PresenceCanWork(PresenceState::Unknown));
+    CHECK(PresenceCanWork(PresenceState::Limited));
+    CHECK(!PresenceCanWork(PresenceState::Exhausted));
+    CHECK(!PresenceCanWork(PresenceState::Offline));
+    CHECK(!PresenceCanWork(PresenceState::NotConnected));
+
+    const fs::path presenceRoot = fs::temp_directory_path() / "agentchats-presence-tests";
+    std::error_code presenceEc;
+    fs::remove_all(presenceRoot, presenceEc);
+    fs::create_directories(presenceRoot, presenceEc);
+    Settings presenceSettings(presenceRoot);
+    presenceSettings.SetDetectedPresence("chatgpt", "chat", {PresenceState::Exhausted, "quota épuisé", ""});
+    CHECK(!PresenceCanWork(presenceSettings.GetPresence("chatgpt", "chat").state));
+    CHECK(presenceSettings.PutBackOnline("chatgpt", "chat"));
+    CHECK(PresenceCanWork(presenceSettings.GetPresence("chatgpt", "chat").state));
+    Settings reloadedPresence(presenceRoot);
+    CHECK(reloadedPresence.Load());
+    CHECK(reloadedPresence.GetPresence("chatgpt", "chat").state == PresenceState::Online);
+    CHECK(reloadedPresence.SetPresence("chatgpt", "chat", {PresenceState::Offline, "économie", ""}));
+    CHECK(!PresenceCanWork(reloadedPresence.GetPresence("chatgpt", "chat").state));
+    CHECK(reloadedPresence.UseDetectedPresence("chatgpt", "chat"));
+    CHECK(reloadedPresence.GetPresence("chatgpt", "chat").state == PresenceState::NotConnected);
+    fs::remove_all(presenceRoot, presenceEc);
     const fs::path base = fs::temp_directory_path() / "agentchats-tests";
     std::error_code ec;
     fs::remove_all(base, ec);
