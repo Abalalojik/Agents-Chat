@@ -5,7 +5,14 @@
 #include "Settings.h"
 
 #include <nlohmann/json.hpp>
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <csignal>
+#include <cstdlib>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <ctime>
@@ -93,11 +100,15 @@ namespace
     {
         // Recent Codex builds require HOME even on Windows. Explorer-launched
         // GUI applications commonly expose USERPROFILE but no HOME.
+#ifdef _WIN32
         wchar_t profile[32768];
         const DWORD n = GetEnvironmentVariableW(L"USERPROFILE", profile, static_cast<DWORD>(std::size(profile)));
         return (n > 0 && n < std::size(profile))
                    ? std::vector<std::wstring>{L"HOME=" + std::wstring(profile)}
                    : std::vector<std::wstring>{};
+#else
+        return {}; // HOME is always set on Linux
+#endif
     }
 
     const std::vector<std::wstring> kCodexEnv = CodexEnvironment();
@@ -105,7 +116,7 @@ namespace
     bool IsAntigravity(const AgentInstall& agent)
     {
         return agent.found && agent.script.empty() &&
-               Lower(Platform::Narrow(fs::path(agent.exe).filename().wstring())) == "agy.exe";
+               Lower(Platform::Narrow(fs::path(agent.exe).stem().wstring())) == "agy";
     }
 
     void EnsureAntigravityStatusHook()
@@ -118,12 +129,19 @@ namespace
             if (in) in >> value;
         }
         catch (...) { return; }
+#ifdef _WIN32
         wchar_t exe[32768];
         const DWORD n = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
         if (!n || n >= std::size(exe))
             return;
         const std::wstring executable(exe, n);
-        if (Lower(Platform::Narrow(fs::path(executable).filename().wstring())) != "agentchats.exe")
+#else
+        std::error_code selfEc;
+        const std::wstring executable = fs::read_symlink("/proc/self/exe", selfEc).wstring();
+        if (executable.empty())
+            return;
+#endif
+        if (Lower(Platform::Narrow(fs::path(executable).stem().wstring())) != "agentchats")
             return; // connection tests must never register themselves as the collector
         if (value.contains("statusLine"))
         {
@@ -131,6 +149,7 @@ namespace
             if (existing.find("--capture-antigravity-status") == std::string::npos)
                 return; // never replace a user-owned status line
         }
+#ifdef _WIN32
         wchar_t shortExe[32768];
         const DWORD shortCount = GetShortPathNameW(executable.c_str(), shortExe, static_cast<DWORD>(std::size(shortExe)));
         const std::wstring shortPath = shortCount && shortCount < std::size(shortExe)
@@ -139,6 +158,12 @@ namespace
         const std::string command = shellSafeShortPath
             ? Platform::Narrow(shortPath) + " --capture-antigravity-status"
             : "powershell.exe -NoProfile -Command \"& '" + Platform::Narrow(executable) + "' --capture-antigravity-status\"";
+#else
+        std::string quoted;
+        for (char c : Platform::Narrow(executable))
+            quoted += c == '\'' ? std::string("'\\''") : std::string(1, c);
+        const std::string command = "'" + quoted + "' --capture-antigravity-status";
+#endif
         value["statusLine"] = {
             {"type", "command"},
             {"command", command},
@@ -1018,9 +1043,16 @@ namespace
 {
     std::wstring EnvPath(const wchar_t* name)
     {
+#ifdef _WIN32
         wchar_t buf[MAX_PATH];
         const DWORD n = GetEnvironmentVariableW(name, buf, MAX_PATH);
         return (n > 0 && n < MAX_PATH) ? std::wstring(buf) : std::wstring();
+#else
+        // The Windows profile variable means the home folder here.
+        const std::string key = std::wstring(name) == L"USERPROFILE" ? "HOME" : Platform::Narrow(name);
+        const char* value = std::getenv(key.c_str());
+        return value ? Platform::Widen(value) : std::wstring();
+#endif
     }
 }
 
@@ -1030,7 +1062,11 @@ AgentInstall FindClaude()
     std::wstring exe = Process::FindOnPath(L"claude.exe");
     if (exe.empty())
     {
+#ifdef _WIN32
         const fs::path local = fs::path(EnvPath(L"USERPROFILE")) / L".local" / L"bin" / L"claude.exe";
+#else
+        const fs::path local = fs::path(EnvPath(L"USERPROFILE")) / L".local" / L"bin" / L"claude";
+#endif
         if (fs::exists(local))
             exe = local.wstring();
     }
@@ -1044,6 +1080,7 @@ AgentInstall FindCodex()
 {
     AgentInstall a;
     std::wstring exe = Process::FindOnPath(L"codex.exe");
+#ifdef _WIN32
     if (exe.empty())
     {
         // The Codex app keeps its CLI in versioned folders: take the most recent.
@@ -1064,6 +1101,7 @@ AgentInstall FindCodex()
             }
         }
     }
+#endif
     a.found = !exe.empty();
     a.exe = exe;
     a.description = a.found ? Platform::Narrow(exe) : "introuvable";
@@ -1088,8 +1126,15 @@ AgentInstall FindGemini()
         return a;
     }
     const std::wstring node = Process::FindOnPath(L"node.exe");
+#ifdef _WIN32
     const fs::path script = fs::path(EnvPath(L"APPDATA")) / L"npm" / L"node_modules" / L"@google" / L"gemini-cli" /
                             L"bundle" / L"gemini.js";
+#else
+    // npm links a "gemini" launcher on PATH to the package's script: follow it.
+    std::error_code linkEc;
+    const std::wstring launcher = Process::FindOnPath(L"gemini");
+    const fs::path script = launcher.empty() ? fs::path() : fs::canonical(fs::path(launcher), linkEc);
+#endif
     a.found = !node.empty() && fs::exists(script);
     a.exe = node;
     a.script = script.wstring();
@@ -1299,6 +1344,57 @@ bool OpenLoginConsole(const std::string& aiId, std::string& error)
         error = "Agent introuvable sur cette machine.";
         return false;
     }
+#ifndef _WIN32
+    // Linux: the desktop's terminal, detached in its own session; one per agent at a time.
+    static std::map<std::string, pid_t> openTerminals;
+    if (const auto running = openTerminals.find(aiId); running != openTerminals.end())
+    {
+        if (waitpid(running->second, nullptr, WNOHANG) == 0)
+        {
+            error = "La console de connexion est déjà ouverte.";
+            return false;
+        }
+        openTerminals.erase(running);
+    }
+    std::vector<std::string> terminal;
+    if (const char* preferred = std::getenv("TERMINAL"); preferred && *preferred && !Process::FindOnPath(Platform::Widen(preferred)).empty())
+        terminal = {preferred, "-e"};
+    else if (!Process::FindOnPath(L"x-terminal-emulator").empty())
+        terminal = {"x-terminal-emulator", "-e"};
+    else if (!Process::FindOnPath(L"gnome-terminal").empty())
+        terminal = {"gnome-terminal", "--"};
+    else if (!Process::FindOnPath(L"konsole").empty())
+        terminal = {"konsole", "-e"};
+    else if (!Process::FindOnPath(L"xterm").empty())
+        terminal = {"xterm", "-e"};
+    if (terminal.empty())
+    {
+        error = "Aucun terminal trouvé : lance la connexion toi-même dans un terminal.";
+        return false;
+    }
+    for (const std::wstring& arg : args)
+        terminal.push_back(Platform::Narrow(arg));
+    std::vector<char*> argv;
+    for (std::string& a : terminal)
+        argv.push_back(a.data());
+    argv.push_back(nullptr);
+    const pid_t pid = fork();
+    if (pid < 0)
+    {
+        error = "Lancement impossible.";
+        return false;
+    }
+    if (pid == 0)
+    {
+        setsid();
+        if (aiId == "gemini")
+            setenv("GEMINI_CLI_NO_RELAUNCH", "true", 1);
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+    openTerminals[aiId] = pid;
+    return true;
+#else
     std::wstring cmdline;
     for (const std::wstring& arg : args)
         cmdline += (cmdline.empty() ? L"" : L" ") + Process::QuoteArg(arg);
@@ -1340,4 +1436,5 @@ bool OpenLoginConsole(const std::string& aiId, std::string& error)
     CloseHandle(pi.hThread);
     open[aiId] = pi.hProcess;
     return true;
+#endif
 }
