@@ -192,12 +192,16 @@ int main(int argc, char** argv)
     Tools::Sources src;
     src.vault = vault;
     src.lore = lore;
+    src.main = vault;
     const std::string read = Tools::RunRead({"lire_note", {{"source", "vault"}, {"chemin", "../Jalyra2/secret.md"}}}, src, ChannelType::Detente);
     CHECK(read.find("hors perimetre") == std::string::npos);
     const std::string ok = Tools::RunRead({"lire_note", {{"source", "lore"}, {"chemin", "persos/Lilith.md"}}}, src, ChannelType::Detente);
     CHECK(ok.find("magie de glace") != std::string::npos);
     const std::string code = Tools::RunRead({"lire_note", {{"source", "vault"}, {"chemin", "Chapitre 3.md"}}}, src, ChannelType::Code);
     CHECK(code.find("Lilith") == std::string::npos); // no vault access from a Code salon
+    const std::string projectFile = Tools::RunRead({"lire_note", {{"source", "principal"}, {"chemin", "Chapitre 3.md"}}}, src, ChannelType::Code);
+    CHECK(projectFile.find("Lilith") != std::string::npos);
+    CHECK(Tools::Guide(ChannelType::Code, false, false, true).find("source\": \"principal") != std::string::npos);
 
     // --- Mail/calendar tools read the provider-neutral local cache -----------------------
     src.dataRoot = base / "cloud-data";

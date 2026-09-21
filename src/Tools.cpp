@@ -176,6 +176,12 @@ namespace Tools
                  "- chercher {\"source\": \"vault\"|\"lore\", \"requete\": \"mots\"} : trouver les notes qui en parlent.\n"
                  "- lister {\"source\": \"vault\"|\"lore\", \"dossier\": \"\"} : voir les notes d'un dossier.\n";
         }
+        if ((type == ChannelType::Code || type == ChannelType::Bugs) && hasCode)
+        {
+            g += "- lire_note {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\"} : lire un fichier texte du projet.\n"
+                 "- chercher {\"source\": \"principal\", \"requete\": \"texte\"} : rechercher dans les fichiers texte du projet.\n"
+                 "- lister {\"source\": \"principal\", \"dossier\": \"\"} : parcourir les dossiers et fichiers du projet.\n";
+        }
         if (type == ChannelType::Analyse && hasVault)
             g += "- proposer_correction {\"source\": \"vault\", \"chemin\": \"...\", \"ancien\": \"texte exact\", \"nouveau\": \"texte corrigé\"} : "
                  "une correction ciblée, montrée en avant/après.\n";
@@ -403,11 +409,12 @@ namespace Tools
             catch (const std::exception& e) { return std::string("Cache bancaire illisible : ") + e.what(); }
         }
 
-        if (type == ChannelType::Code || type == ChannelType::Bugs)
-            return "Pas d'accès au vault ni au lore dans un salon d'ingénierie.";
         fs::path globalRoot;
         const fs::path* root = RootFor(a, src);
         const std::string source = a.value("source", "vault");
+        if ((type == ChannelType::Code || type == ChannelType::Bugs) && source != "principal" &&
+            source != "global" && source.rfind("dossier_", 0) != 0)
+            return "Dans un salon d'ingénierie, utilise source=principal ou un dossier supplémentaire autorisé.";
         if (source == "global" && src.globalRead)
         {
             const std::string raw = call.name == "lister" ? a.value("dossier", "") : a.value("chemin", "");
