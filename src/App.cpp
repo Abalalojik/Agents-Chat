@@ -256,6 +256,7 @@ namespace
     {
         if (kind == "question") return "Question";
         if (kind == "correction") return "Correction";
+        if (kind == "file_write") return "Écriture de fichier";
         if (kind == "skill") return "Demande de skill";
         if (kind == "code") return "Travail de code";
         return "Demande";
@@ -313,7 +314,7 @@ void App::RefreshAvailability(const std::string& aiId)
                 a.claude = s.loggedIn;
                 a.claudeDetail = s.detail;
                 a.claudePresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
-                                                                   : PresenceState::Unknown)
+                                                                   : PresenceState::Online)
                                                  : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
                                     s.detail, s.resetsAt};
             }
@@ -329,7 +330,7 @@ void App::RefreshAvailability(const std::string& aiId)
                 a.codex = s.loggedIn;
                 a.codexDetail = s.detail;
                 a.codexPresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
-                                                                  : PresenceState::Unknown)
+                                                                  : PresenceState::Online)
                                                 : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
                                    s.detail, s.resetsAt};
             }
@@ -345,7 +346,7 @@ void App::RefreshAvailability(const std::string& aiId)
                 a.gemini = s.loggedIn;
                 a.geminiDetail = (geminiModel.empty() ? std::string("modèle automatique") : geminiModel) + " · " + s.detail;
                 a.geminiPresence = {s.planActive ? (s.quotaKnown ? (s.quotaAvailable ? PresenceState::Online : PresenceState::Exhausted)
-                                                                   : PresenceState::Unknown)
+                                                                   : PresenceState::Online)
                                                  : (s.loggedIn ? PresenceState::Offline : PresenceState::NotConnected),
                                     a.geminiDetail, s.resetsAt};
             }
@@ -1057,6 +1058,24 @@ void App::DrawInboxItem(const InboxItem& item)
         ImGui::TextColored(kColOk, "Après :");
         ImGui::TextColored(Rgb(0x9FE3B5), "%s", args.value("nouveau", std::string()).c_str());
     }
+    else if (item.kind == "file_write")
+    {
+        const std::string operation = args.value("nom", std::string());
+        ImGui::TextColored(kColDim, "%s : %s", args.value("source", std::string("principal")).c_str(),
+                           args.value("chemin", std::string()).c_str());
+        if (operation == "remplacer_dans_fichier")
+        {
+            ImGui::TextColored(kColError, "Avant (correspondance exacte unique) :");
+            ImGui::TextUnformatted(args.value("ancien", std::string()).substr(0, 4000).c_str());
+            ImGui::TextColored(kColOk, "Après :");
+            ImGui::TextUnformatted(args.value("nouveau", std::string()).substr(0, 4000).c_str());
+        }
+        else
+        {
+            ImGui::TextColored(kColOk, "Nouveau contenu%s :", args.value("contenu", std::string()).size() > 4000 ? " (aperçu)" : "");
+            ImGui::TextUnformatted(args.value("contenu", std::string()).substr(0, 4000).c_str());
+        }
+    }
     else if (item.kind == "skill")
     {
         ImGui::Text("Skill : %s", args.value("nom", std::string("?")).c_str());
@@ -1092,12 +1111,14 @@ void App::DrawInboxItem(const InboxItem& item)
         }
         else
         {
-            const char* acceptLabel = item.kind == "correction" ? "Appliquer" : item.kind == "code" ? "Lancer" : "Accepter";
+            const char* acceptLabel = (item.kind == "correction" || item.kind == "file_write") ? "Appliquer" : item.kind == "code" ? "Lancer" : "Accepter";
             ImGui::PushStyleColor(ImGuiCol_Button, kColOk);
             if (ImGui::Button(acceptLabel))
             {
                 if (item.kind == "correction")
                     ApplyCorrection(item);
+                else if (item.kind == "file_write")
+                    ApplyProjectEdit(item);
                 else if (item.kind == "code")
                     LaunchCodeWork(item);
                 else if (item.kind == "skill")
@@ -1211,6 +1232,107 @@ void App::ApplyCorrection(const InboxItem& item)
         }
     }
     const bool applied = outcome.rfind("Correction appliquée", 0) == 0;
+    m_store.DecideInboxItem(item.id, applied ? "accepte" : "refuse", outcome);
+    PostSystem(item.subserverId, item.channelId, outcome);
+}
+
+void App::ApplyProjectEdit(const InboxItem& item)
+{
+    const json args = json::parse(item.payload, nullptr, false);
+    Subserver* sub = m_store.FindSubserver(item.subserverId);
+    Channel* ch = sub ? m_store.FindChannel(*sub, item.channelId) : nullptr;
+    std::string outcome;
+    if (!sub || !ch || args.is_discarded())
+        return;
+
+    const auto role = ch->roles.find(item.ai);
+    if ((ch->type != ChannelType::Code && ch->type != ChannelType::Bugs) ||
+        role == ch->roles.end() || !role->second.canWriteFiles)
+        outcome = "Écriture refusée : la permission Can Write n'est plus active dans ce salon.";
+    else
+    {
+        Tools::Sources sources;
+        sources.main = Platform::Widen(!sub->mainPath.empty() ? sub->mainPath : sub->codePath);
+        for (const Subserver::FolderAccess& folder : sub->additionalFolders)
+            sources.additional.push_back({Platform::Widen(folder.path), folder.canWrite});
+        for (const Subserver::ExclusionRule& rule : sub->exclusions)
+            sources.exclusions.push_back({Platform::Widen(rule.path), rule.mode});
+
+        std::string error;
+        const std::string relative = args.value("chemin", "");
+        const fs::path target = Tools::ResolveWrite(sources, args.value("source", "principal"), relative, error);
+        if (target.empty())
+            outcome = "Écriture refusée pour « " + relative + " » : " + error;
+        else
+        {
+            std::error_code ec;
+            const bool exists = fs::exists(target, ec);
+            std::string text = exists ? ReadWhole(target) : std::string();
+            bool ready = false;
+            const std::string operation = args.value("nom", "");
+            if (operation == "ecrire_fichier")
+            {
+                text = args.value("contenu", std::string());
+                ready = true;
+            }
+            else if (operation == "remplacer_dans_fichier")
+            {
+                const std::string before = args.value("ancien", std::string());
+                const std::string after = args.value("nouveau", std::string());
+                if (!exists)
+                    outcome = "Remplacement annulé : le fichier n'existe pas.";
+                else if (before.empty())
+                    outcome = "Remplacement annulé : le texte « ancien » est vide.";
+                else
+                {
+                    const size_t at = text.find(before);
+                    if (at == std::string::npos)
+                        outcome = "Remplacement annulé : le texte exact n'a pas été trouvé (le fichier a peut-être changé).";
+                    else if (text.find(before, at + before.size()) != std::string::npos)
+                        outcome = "Remplacement annulé : le texte apparaît plusieurs fois, la modification serait ambiguë.";
+                    else
+                    {
+                        text.replace(at, before.size(), after);
+                        ready = true;
+                    }
+                }
+            }
+            else
+                outcome = "Outil d'écriture inconnu.";
+
+            if (ready && text.size() > 1024 * 1024)
+            {
+                ready = false;
+                outcome = "Écriture annulée : le fichier dépasserait la limite de 1 Mio.";
+            }
+            if (ready)
+            {
+                bool backupReady = true;
+                if (exists)
+                {
+                    const fs::path backups = m_store.Root() / "backups" / item.subserverId;
+                    fs::create_directories(backups, ec);
+                    std::string stamp = Platform::NowIsoUtc();
+                    std::replace(stamp.begin(), stamp.end(), ':', '-');
+                    const fs::path backup = backups / (Platform::Widen(stamp + "_" + item.id + "_") + target.filename().wstring());
+                    if (ec || !fs::copy_file(target, backup, fs::copy_options::none, ec))
+                    {
+                        backupReady = false;
+                        outcome = "Écriture annulée : sauvegarde de la version précédente impossible (" + ec.message() + ").";
+                    }
+                }
+                if (backupReady)
+                {
+                    fs::create_directories(target.parent_path(), ec);
+                    if (!ec && WriteWhole(target, text))
+                        outcome = "Écriture appliquée à « " + relative + " »" + (exists ? " (ancienne version gardée dans backups)." : " (nouveau fichier).");
+                    else
+                        outcome = "Écriture impossible dans « " + relative + " ».";
+                }
+            }
+        }
+    }
+    const bool applied = outcome.rfind("Écriture appliquée", 0) == 0;
     m_store.DecideInboxItem(item.id, applied ? "accepte" : "refuse", outcome);
     PostSystem(item.subserverId, item.channelId, outcome);
 }
@@ -1951,6 +2073,45 @@ void App::HandleAction(const ConductorEvent& ev)
         item.payload = args.dump();
         m_store.AddInboxItem(item);
         PostSystem(sub->id, ch->id, who + " propose une correction de « " + args.value("chemin", std::string()) + " » (boîte aux lettres).");
+    }
+    else if (name == "ecrire_fichier" || name == "remplacer_dans_fichier")
+    {
+        const auto role = ch->roles.find(ev.ai);
+        if ((ch->type != ChannelType::Code && ch->type != ChannelType::Bugs) ||
+            role == ch->roles.end() || !role->second.canWriteFiles)
+        {
+            PostSystem(sub->id, ch->id, who + " n'a pas la permission Can Write dans ce salon.");
+            return;
+        }
+        const std::string relative = args.value("chemin", "");
+        const std::string source = args.value("source", "principal");
+        const std::string payload = name == "ecrire_fichier" ? args.value("contenu", std::string())
+                                                               : args.value("ancien", std::string()) + args.value("nouveau", std::string());
+        if (relative.empty() || payload.size() > 1024 * 1024)
+        {
+            PostSystem(sub->id, ch->id, who + " a proposé une écriture invalide (chemin vide ou contenu supérieur à 1 Mio)." );
+            return;
+        }
+        Tools::Sources sources;
+        sources.main = Platform::Widen(!sub->mainPath.empty() ? sub->mainPath : sub->codePath);
+        for (const Subserver::FolderAccess& folder : sub->additionalFolders)
+            sources.additional.push_back({Platform::Widen(folder.path), folder.canWrite});
+        for (const Subserver::ExclusionRule& rule : sub->exclusions)
+            sources.exclusions.push_back({Platform::Widen(rule.path), rule.mode});
+        std::string error;
+        if (Tools::ResolveWrite(sources, source, relative, error).empty())
+        {
+            PostSystem(sub->id, ch->id, who + " ne peut pas écrire « " + relative + " » : " + error);
+            return;
+        }
+        InboxItem item;
+        item.kind = "file_write";
+        item.subserverId = sub->id;
+        item.channelId = ch->id;
+        item.ai = ev.ai;
+        item.payload = args.dump();
+        m_store.AddInboxItem(item);
+        PostSystem(sub->id, ch->id, who + " propose de modifier « " + relative + " » (boîte aux lettres)." );
     }
     else if (name == "demander_skill")
     {

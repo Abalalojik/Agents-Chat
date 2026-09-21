@@ -180,7 +180,10 @@ namespace Tools
         {
             g += "- lire_note {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\"} : lire un fichier texte du projet.\n"
                  "- chercher {\"source\": \"principal\", \"requete\": \"texte\"} : rechercher dans les fichiers texte du projet.\n"
-                 "- lister {\"source\": \"principal\", \"dossier\": \"\"} : parcourir les dossiers et fichiers du projet.\n";
+                 "- lister {\"source\": \"principal\", \"dossier\": \"\"} : parcourir les dossiers et fichiers du projet.\n"
+                 "- ecrire_fichier {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\", \"contenu\": \"...\"} : créer ou remplacer un fichier texte.\n"
+                 "- remplacer_dans_fichier {\"source\": \"principal\", \"chemin\": \"src/fichier.cpp\", \"ancien\": \"texte exact unique\", \"nouveau\": \"...\"} : modification ciblée.\n"
+                 "Les écritures exigent la permission Can Write et l'approbation de l'utilisatrice.\n";
         }
         if (type == ChannelType::Analyse && hasVault)
             g += "- proposer_correction {\"source\": \"vault\", \"chemin\": \"...\", \"ancien\": \"texte exact\", \"nouveau\": \"texte corrigé\"} : "
@@ -217,6 +220,50 @@ namespace Tools
         if (f.size() < b.size() || _wcsnicmp(f.c_str(), b.c_str(), b.size()) != 0)
             return {};
         return full;
+    }
+
+    fs::path ResolveWrite(const Sources& src, const std::string& source, const std::string& relative, std::string& error)
+    {
+        error.clear();
+        const fs::path* root = nullptr;
+        if (source == "principal")
+            root = src.main.empty() ? nullptr : &src.main;
+        else if (source.rfind("dossier_", 0) == 0)
+        {
+            try
+            {
+                const size_t index = static_cast<size_t>(std::stoul(source.substr(8)));
+                if (index < src.additional.size() && src.additional[index].canWrite)
+                    root = &src.additional[index].path;
+                else
+                    error = "Ce dossier supplémentaire n'est pas marqué Can Write.";
+            }
+            catch (...) { error = "Alias de dossier invalide."; }
+        }
+        else
+            error = "L'écriture n'est permise que dans le dossier principal ou un dossier Can Write.";
+        if (!root)
+        {
+            if (error.empty()) error = "Dossier d'écriture introuvable.";
+            return {};
+        }
+        const fs::path target = Confine(*root, relative);
+        if (target.empty())
+        {
+            error = "Chemin refusé : il sort du dossier autorisé ou vise un dossier caché.";
+            return {};
+        }
+        if (!IsTextNote(target))
+        {
+            error = "Type de fichier refusé : seuls les fichiers texte et de code sont modifiables.";
+            return {};
+        }
+        if (!ExclusionMode(src, *root, target).empty())
+        {
+            error = "Chemin refusé par une règle d'exclusion du sous-serveur.";
+            return {};
+        }
+        return target;
     }
 
     namespace

@@ -175,7 +175,7 @@ struct Presence
 struct InboxItem
 {
     std::string id;
-    std::string kind;        // "correction", "question", "skill", "code"
+    std::string kind;        // "correction", "file_write", "question", "skill", "code"
     std::string subserverId;
     std::string channelId;
     std::string ai;          // who asked

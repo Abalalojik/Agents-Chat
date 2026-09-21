@@ -53,6 +53,12 @@ namespace Tools
     // Runs a reading tool, returns its result as text for the AI.
     std::string RunRead(const Call& call, const Sources& sources, ChannelType type);
 
+    // Resolves a writable project file. Only the primary folder and additional
+    // folders explicitly marked Can Write are eligible; exclusions always win.
+    // Returns an empty path and a user-facing error when access is refused.
+    std::filesystem::path ResolveWrite(const Sources& sources, const std::string& source,
+                                       const std::string& relative, std::string& error);
+
     // Resolves a path inside a root; empty on escape, `.obsidian`, or bad input.
     std::filesystem::path Confine(const std::filesystem::path& root, const std::string& relative);
 

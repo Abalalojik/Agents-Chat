@@ -62,6 +62,7 @@ private:
     void ProcessEvents();
     void HandleAction(const ConductorEvent& ev);
     void ApplyCorrection(const InboxItem& item);
+    void ApplyProjectEdit(const InboxItem& item);
     void LaunchCodeWork(const InboxItem& item);
     void RequestSkill(const InboxItem& item);
     void PostSystem(const std::string& subserverId, const std::string& channelId, const std::string& text,

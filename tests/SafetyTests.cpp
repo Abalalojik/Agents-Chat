@@ -202,6 +202,20 @@ int main(int argc, char** argv)
     const std::string projectFile = Tools::RunRead({"lire_note", {{"source", "principal"}, {"chemin", "Chapitre 3.md"}}}, src, ChannelType::Code);
     CHECK(projectFile.find("Lilith") != std::string::npos);
     CHECK(Tools::Guide(ChannelType::Code, false, false, true).find("source\": \"principal") != std::string::npos);
+    CHECK(Tools::Guide(ChannelType::Code, false, false, true).find("ecrire_fichier") != std::string::npos);
+
+    // --- Project writes honor aliases, Can Write and exclusions ----------------------------
+    std::string writeError;
+    CHECK(!Tools::ResolveWrite(src, "principal", "nouveau.cpp", writeError).empty());
+    CHECK(Tools::ResolveWrite(src, "principal", "../dehors.cpp", writeError).empty());
+    CHECK(Tools::ResolveWrite(src, "principal", ".git/config", writeError).empty());
+    src.additional.push_back({lore, false});
+    CHECK(Tools::ResolveWrite(src, "dossier_0", "persos/Lilith.md", writeError).empty());
+    src.additional[0].canWrite = true;
+    CHECK(!Tools::ResolveWrite(src, "dossier_0", "persos/Lilith.md", writeError).empty());
+    src.exclusions.push_back({fs::path("persos"), "cant_read"});
+    CHECK(Tools::ResolveWrite(src, "dossier_0", "persos/Lilith.md", writeError).empty());
+    CHECK(Tools::ResolveWrite(src, "global", "C:/Windows/win.ini", writeError).empty());
 
     // --- Mail/calendar tools read the provider-neutral local cache -----------------------
     src.dataRoot = base / "cloud-data";

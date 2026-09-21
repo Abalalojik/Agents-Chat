@@ -131,9 +131,14 @@ namespace
             if (existing.find("--capture-antigravity-status") == std::string::npos)
                 return; // never replace a user-owned status line
         }
+        wchar_t shortExe[32768];
+        const DWORD shortCount = GetShortPathNameW(executable.c_str(), shortExe, static_cast<DWORD>(std::size(shortExe)));
+        const std::string command = shortCount && shortCount < std::size(shortExe)
+            ? Platform::Narrow(std::wstring(shortExe, shortCount)) + " --capture-antigravity-status"
+            : "powershell.exe -NoProfile -Command \"& '" + Platform::Narrow(executable) + "' --capture-antigravity-status\"";
         value["statusLine"] = {
             {"type", "command"},
-            {"command", "\"" + Platform::Narrow(executable) + "\" --capture-antigravity-status"},
+            {"command", command},
             {"enabled", true},
             {"stack_with_default", true}
         };
@@ -1102,7 +1107,10 @@ LoginStatus CheckLogin(const std::string& aiId)
             s.loggedIn = j.value("loggedIn", false);
             s.plan = j.value("subscriptionType", std::string());
             s.planActive = s.loggedIn && j.value("authMethod", std::string()) == "claude.ai" && !s.plan.empty();
-            s.detail = s.planActive ? "forfait Claude " + s.plan + " · quota inconnu"
+            // Claude Code exposes the authenticated subscription, but no
+            // headless read-only usage counter. Runtime limit events still
+            // move it to Exhausted; do not pretend the active plan is unknown.
+            s.detail = s.planActive ? "forfait Claude " + s.plan + " actif · compteur non exposé par Claude CLI"
                                     : (s.loggedIn ? "compte Claude connecté sans forfait détecté" : "non connectée");
         }
         catch (...)
@@ -1138,28 +1146,49 @@ LoginStatus CheckLogin(const std::string& aiId)
             s.loggedIn = true;
             s.plan = acc.value("planType", std::string());
             s.planActive = acc.value("type", std::string()) == "chatgpt" && !s.plan.empty();
+            std::vector<const json*> rateBuckets;
             if (limits.contains("rateLimits") && limits["rateLimits"].is_object())
+                rateBuckets.push_back(&limits["rateLimits"]);
+            if (limits.contains("rateLimitsByLimitId") && limits["rateLimitsByLimitId"].is_object())
+                for (const auto& [_, bucket] : limits["rateLimitsByLimitId"].items())
+                    if (bucket.is_object()) rateBuckets.push_back(&bucket);
+            if (!rateBuckets.empty())
             {
-                const json& rate = limits["rateLimits"];
                 s.quotaKnown = true;
-                s.quotaAvailable = rate.value("rateLimitReachedType", std::string()).empty();
-                double remaining = 100.0;
+                s.quotaAvailable = false;
+                double remaining = 0.0;
                 long long reset = 0;
-                for (const char* window : {"primary", "secondary"})
-                    if (rate.contains(window) && rate[window].is_object())
-                    {
-                        const double used = rate[window].value("usedPercent", 0.0);
-                        remaining = std::min(remaining, std::max(0.0, 100.0 - used));
-                        if (used >= 100.0)
+                for (const json* rate : rateBuckets)
+                {
+                    bool bucketAvailable = rate->value("rateLimitReachedType", std::string()).empty();
+                    double bucketRemaining = 100.0;
+                    bool sawWindow = false;
+                    for (const char* window : {"primary", "secondary"})
+                        if (rate->contains(window) && (*rate)[window].is_object())
                         {
-                            s.quotaAvailable = false;
-                            reset = std::max(reset, rate[window].value("resetsAt", 0LL));
+                            sawWindow = true;
+                            const double used = (*rate)[window].value("usedPercent", 0.0);
+                            bucketRemaining = std::min(bucketRemaining, std::max(0.0, 100.0 - used));
+                            if (used >= 100.0)
+                            {
+                                bucketAvailable = false;
+                                reset = std::max(reset, (*rate)[window].value("resetsAt", 0LL));
+                            }
                         }
+                    if (!sawWindow && rate->contains("usedPercent"))
+                    {
+                        const double used = rate->value("usedPercent", 0.0);
+                        bucketRemaining = std::max(0.0, 100.0 - used);
+                        bucketAvailable = bucketAvailable && used < 100.0;
+                        if (!bucketAvailable) reset = std::max(reset, rate->value("resetsAt", 0LL));
                     }
+                    s.quotaAvailable = s.quotaAvailable || bucketAvailable;
+                    remaining = std::max(remaining, bucketRemaining);
+                }
                 s.remainingPercent = remaining;
                 if (reset > 0) s.resetsAt = IsoFromEpoch(reset);
                 const int rounded = static_cast<int>(remaining + 0.5);
-                s.detail = s.quotaAvailable ? "forfait ChatGPT " + s.plan + " · " + std::to_string(rounded) + "% disponible"
+                s.detail = s.quotaAvailable ? "forfait ChatGPT " + s.plan + " · jusqu'à " + std::to_string(rounded) + "% disponible"
                                             : "quota Codex épuisé";
             }
             else
