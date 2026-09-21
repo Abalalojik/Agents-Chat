@@ -2,6 +2,8 @@
 #include "CodeWorker.h"
 #include "CloudSync.h"
 #include "Conductor.h"
+#include "Console.h"
+#include "Process.h"
 #include "Settings.h"
 #include "Store.h"
 #include "Updater.h"
@@ -9,6 +11,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <mutex>
 #include <string>
@@ -143,6 +146,42 @@ private:
     void DrawGitHubDialog();
     void AcceptGitHubRequest(const InboxItem& item);
     void AcceptSelfImprovement(const InboxItem& item);
+
+    // Console of Code salons: one command = one process, in the salon's code folder.
+    struct ConsoleEntry
+    {
+        std::string id, who, profile, command, output, at; // who: "user" or an AI id
+        long long exitCode = 0;
+        bool running = false, timedOut = false, cancelled = false, shared = false;
+    };
+    struct ConsoleRun
+    {
+        std::string subserverId, channelId, entryId, who;
+        std::atomic<bool> cancel{false};
+        std::atomic<bool> done{false};
+        std::mutex mutex;
+        std::string output;
+        size_t shownSize = 0;
+        Process::Result result;
+        std::filesystem::path script;
+        std::thread thread;
+    };
+    struct ConsoleState
+    {
+        bool loaded = false, open = false, scroll = false;
+        int profile = 1; // Console::Profile
+        std::string input;
+        std::vector<ConsoleEntry> entries;
+    };
+    ConsoleState& ConsoleFor(const Subserver& subserver, const Channel& channel);
+    void DrawConsole(Subserver& subserver, Channel& channel, float width, float height);
+    void StartConsoleCommand(const Subserver& subserver, const Channel& channel, Console::Profile profile,
+                             const std::string& command, const std::string& who);
+    void PollConsoles();
+    void SaveConsoleEntry(const std::string& subserverId, const std::string& channelId, const ConsoleEntry& entry);
+    std::vector<std::string> KnownSecrets() const;
+    std::map<std::string, ConsoleState> m_consoles; // channel id
+    std::vector<std::unique_ptr<ConsoleRun>> m_consoleRuns;
     void ReportSelfBuild();
     std::thread m_ghThread;
     std::atomic<bool> m_ghBusy{false};

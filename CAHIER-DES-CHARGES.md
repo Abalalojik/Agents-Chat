@@ -131,7 +131,15 @@ Code, les IA modifient le code (écritures et agents de code approuvés), puis l
 ## 11. Console de salon Code
 
 - Besoin : console en bas des salons Code avec profils gcloud, CMD et PowerShell.
-- État : **non activée tant que le modèle de sécurité n'est pas validé**.
+- État : **activée** après validation du modèle de sécurité par l'utilisatrice (21 septembre 2026) :
+  - une commande = un processus, dans le dossier de code du sous-serveur (affiché), sans état conservé entre deux
+    commandes ; profils CMD, PowerShell et gcloud (ce dernier : `gcloud …` uniquement, sans enchaînement ni redirection) ;
+  - groupe de processus Windows : 3 Go, 10 minutes, bouton d'arrêt qui tue aussi les enfants ; jamais d'élévation ;
+  - variables d'environnement à allure de secret retirées ; clés connues et formes de clés masquées à l'affichage
+    et dans l'historique local (`console.jsonl` du salon), chaque ligne marquée « toi » ou IA ;
+  - outil `console` des IA : carte dans la boîte aux lettres avec la commande exacte, sauf commande identique mot
+    pour mot à la liste autorisée ; la sortie masquée revient à l'IA demandeuse. Les commandes de l'utilisatrice
+    restent privées sauf « Partager avec le salon ».
 - Exigences minimales : dossier de travail visible, liste de commandes autorisées ou confirmation, masquage des
   secrets, historique local, arrêt du processus, limites de ressources, distinction commande humaine/agent.
 - Une console arbitraire héritant de toutes les variables et identifiants locaux est hors acceptation.
@@ -196,5 +204,6 @@ les issues, dépôt public AGPLv3.
 Fait depuis : synchronisation `gh` des issues, mises à jour signées, auto-amélioration (compiler/tester, installer,
 PR), contexte court local.
 
-À achever/prouver : vrai test UI complet des nouvelles vues, relais d'invite, atelier de fine-tuning, console sécurisée,
-et port Linux natif.
+Test UI de bout en bout fait le 21 septembre 2026 (auto-amélioration : compilation, installation, retour arrière).
+
+À achever/prouver : essai visuel de la console, relais d'invite, atelier de fine-tuning, et port Linux natif.

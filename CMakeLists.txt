@@ -55,6 +55,7 @@ add_executable(AgentChats WIN32
   src/Tools.cpp
   src/Conductor.cpp
   src/ShortContext.cpp
+  src/Console.cpp
   src/CodeWorker.cpp
   src/GitHub.cpp
   src/ReleaseSignature.cpp)
@@ -74,6 +75,7 @@ add_executable(AgentChatsTests
   src/Tools.cpp
   src/Conductor.cpp
   src/ShortContext.cpp
+  src/Console.cpp
   src/Backends.cpp
   src/Process.cpp
   src/Http.cpp

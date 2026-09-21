@@ -22,7 +22,7 @@ namespace Process
     // Quotes one argument for CreateProcess (MSVC argv rules).
     std::wstring QuoteArg(const std::wstring& arg);
 
-    // args[0] is the executable path. Environment additions are "NAME=value".
+    // args[0] is the executable path. Environment additions are "NAME=value"; "-NAME" removes NAME.
     Result Run(const std::vector<std::wstring>& args,
                const std::wstring& workingDir,
                const std::string& stdinUtf8,

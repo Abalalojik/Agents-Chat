@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <vector>
 
 // App-wide options, saved in <data root>/settings.json.
 class Settings
@@ -50,6 +51,8 @@ public:
     std::string ApiKey(const std::string& provider) const;
     bool HasApiKey(const std::string& provider) const { return m_apiKeys.count(provider) > 0; }
     bool SetApiKey(const std::string& provider, const std::string& plainKey); // "" removes it
+    // Every stored key in clear, only to mask them in displayed output. Never log or persist.
+    std::vector<std::string> AllApiKeys() const;
 
     const std::string& LastError() const { return m_lastError; }
 

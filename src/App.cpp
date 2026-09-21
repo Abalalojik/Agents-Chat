@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 
 using nlohmann::json;
 namespace fs = std::filesystem;
@@ -264,6 +265,7 @@ namespace
         if (kind == "code") return "Travail de code";
         if (kind == "github") return "GitHub";
         if (kind == "amelioration") return "Auto-amélioration";
+        if (kind == "console") return "Commande de console";
         return "Demande";
     }
 }
@@ -294,6 +296,11 @@ App::~App()
 {
     m_conductor.Stop();
     m_codeWorker.StopAll();
+    for (auto& run : m_consoleRuns)
+        run->cancel = true;
+    for (auto& run : m_consoleRuns)
+        if (run->thread.joinable())
+            run->thread.join();
     if (m_availThread.joinable())
         m_availThread.join();
     if (m_ghThread.joinable())
@@ -454,6 +461,7 @@ void App::Frame()
         ApplyAvailability();
     ProcessEvents();
     ReportSelfBuild();
+    PollConsoles();
     {
         std::vector<std::function<void()>> done;
         {
@@ -867,8 +875,13 @@ void App::DrawChannelView(Subserver& subserver, Channel& channel, float width, f
 
     const bool busyHere = m_conductor.Busy() && m_jobChannel == channel.id;
     const float composerHeight = ImGui::GetTextLineHeight() * 3.0f + ImGui::GetStyle().FramePadding.y * 2.0f;
+    // Code salons: the console sits between the thread and the composer.
+    float consoleHeight = 0.0f;
+    if (channel.type == ChannelType::Code)
+        consoleHeight = ConsoleFor(subserver, channel).open ? std::max(160.0f * scale, height * 0.35f)
+                                                            : ImGui::GetFrameHeightWithSpacing();
     const float listHeight = height - ImGui::GetCursorPosY() + ImGui::GetStyle().WindowPadding.y - composerHeight -
-                             ImGui::GetStyle().ItemSpacing.y * 2.0f - ImGui::GetTextLineHeightWithSpacing();
+                             ImGui::GetStyle().ItemSpacing.y * 2.0f - ImGui::GetTextLineHeightWithSpacing() - consoleHeight;
     ImGui::BeginChild("##messages", ImVec2(width, std::max(50.0f, listHeight)));
     const std::vector<Message>& messages = m_store.Messages(subserver, channel);
     if (messages.empty())
@@ -934,6 +947,9 @@ void App::DrawChannelView(Subserver& subserver, Channel& channel, float width, f
         m_scrollToBottom = false;
     }
     ImGui::EndChild();
+
+    if (channel.type == ChannelType::Code)
+        DrawConsole(subserver, channel, width, consoleHeight);
 
     // Composer
     ImGui::Spacing();
@@ -1141,6 +1157,13 @@ void App::DrawInboxItem(const InboxItem& item)
                 ImGui::Checkbox("J'ai vérifié moi-même que les tests passent", &m_ghInboxTests[item.id]);
         }
     }
+    else if (item.kind == "console")
+    {
+        ImGui::TextColored(kColWarn, "Commande exacte (%s), dans %s :", args.value("profil", std::string("PowerShell")).c_str(),
+                           sub ? sub->codePath.c_str() : "?");
+        ImGui::TextUnformatted(Console::Mask(args.value("commande", std::string()), KnownSecrets()).c_str());
+        ImGui::TextColored(kColDim, "Un seul processus, 10 min max, variables secrètes retirées ; la sortie masquée revient à l'IA.");
+    }
     else if (item.kind == "amelioration")
     {
         const std::string action = args.value("action", "");
@@ -1192,7 +1215,9 @@ void App::DrawInboxItem(const InboxItem& item)
         }
         else
         {
-            const char* acceptLabel = (item.kind == "correction" || item.kind == "file_write") ? "Appliquer" : item.kind == "code" ? "Lancer" : "Accepter";
+            const char* acceptLabel = (item.kind == "correction" || item.kind == "file_write") ? "Appliquer"
+                                      : (item.kind == "code" || item.kind == "console")        ? "Lancer"
+                                                                                                : "Accepter";
             ImGui::PushStyleColor(ImGuiCol_Button, kColOk);
             // A decision needs a real click: keystrokes that land here while the window steals
             // focus (Space/Enter on a navigated button) must never approve anything.
@@ -1229,6 +1254,12 @@ void App::DrawInboxItem(const InboxItem& item)
                     AcceptGitHubRequest(item);
                 else if (item.kind == "amelioration")
                     AcceptSelfImprovement(item);
+                else if (item.kind == "console" && sub && ch)
+                {
+                    m_store.DecideInboxItem(item.id, "accepte", "Commande lancée dans la console.");
+                    StartConsoleCommand(*sub, *ch, Console::ProfileFromName(args.value("profil", std::string("PowerShell"))),
+                                        args.value("commande", std::string()), item.ai);
+                }
             }
             ImGui::PopStyleColor();
         }
@@ -2407,6 +2438,41 @@ void App::HandleAction(const ConductorEvent& ev)
                                                                                  : "fermer l'issue #" + std::to_string(args.value("numero", 0));
         PostSystem(sub->id, ch->id, who + " propose de " + what + " (boîte aux lettres : rien n'est publié sans toi).");
     }
+    else if (name == "console")
+    {
+        const std::string command = Trim(args.value("commande", std::string()));
+        const std::string profileName = args.value("profil", std::string("PowerShell"));
+        if (ch->type != ChannelType::Code)
+        {
+            PostSystem(sub->id, ch->id, who + " : la console n'existe que dans les salons Code.");
+            return;
+        }
+        if (command.empty() || command.size() > 2000)
+        {
+            PostSystem(sub->id, ch->id, who + " : commande de console vide ou trop longue.");
+            return;
+        }
+        // Only a command identical, word for word, to the user's list runs without asking.
+        bool allowed = false;
+        std::istringstream list(m_settings.AllowedCommands());
+        for (std::string line; std::getline(list, line);)
+            if (Trim(line) == command)
+                allowed = true;
+        if (allowed && command.find('\n') == std::string::npos)
+        {
+            PostSystem(sub->id, ch->id, who + " lance dans la console (commande autorisée) : " + command);
+            StartConsoleCommand(*sub, *ch, Console::ProfileFromName(profileName), command, ev.ai);
+            return;
+        }
+        InboxItem item;
+        item.kind = "console";
+        item.subserverId = sub->id;
+        item.channelId = ch->id;
+        item.ai = ev.ai;
+        item.payload = json{{"commande", command}, {"profil", Console::ProfileName(Console::ProfileFromName(profileName))}}.dump();
+        m_store.AddInboxItem(item);
+        PostSystem(sub->id, ch->id, who + " demande à lancer dans la console (boîte aux lettres) : " + command);
+    }
     else if (name == "ameliorer")
     {
         const std::string action = args.value("action", "");
@@ -2658,6 +2724,293 @@ void App::ReportSelfBuild()
     Channel* ch = sub ? m_store.FindChannel(*sub, origin.channelId) : nullptr;
     if (sub && ch && !m_conductor.Busy())
         StartJob(*sub, *ch, {origin.ai});
+}
+
+// ===========================================================================
+// Console of Code salons
+// ===========================================================================
+
+std::vector<std::string> App::KnownSecrets() const
+{
+    return m_settings.AllApiKeys();
+}
+
+App::ConsoleState& App::ConsoleFor(const Subserver& subserver, const Channel& channel)
+{
+    ConsoleState& state = m_consoles[channel.id];
+    if (state.loaded)
+        return state;
+    state.loaded = true;
+    std::ifstream in(m_store.ChannelDir(subserver, channel) / "console.jsonl", std::ios::binary);
+    for (std::string line; std::getline(in, line);)
+    {
+        const json j = json::parse(line, nullptr, false);
+        if (j.is_discarded())
+            continue;
+        ConsoleEntry e;
+        e.id = j.value("id", "");
+        e.who = j.value("who", "user");
+        e.profile = j.value("profile", "PowerShell");
+        e.command = j.value("command", "");
+        e.output = j.value("output", "");
+        e.at = j.value("at", "");
+        e.exitCode = j.value("exitCode", 0LL);
+        e.timedOut = j.value("timedOut", false);
+        e.cancelled = j.value("cancelled", false);
+        state.entries.push_back(std::move(e));
+    }
+    if (state.entries.size() > 200)
+        state.entries.erase(state.entries.begin(), state.entries.end() - 200);
+    return state;
+}
+
+void App::SaveConsoleEntry(const std::string& subserverId, const std::string& channelId, const ConsoleEntry& e)
+{
+    Subserver* sub = m_store.FindSubserver(subserverId);
+    const Channel* ch = sub ? m_store.FindChannel(*sub, channelId) : nullptr;
+    if (!sub || !ch)
+        return;
+    const fs::path path = m_store.ChannelDir(*sub, *ch) / "console.jsonl";
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    out << json{{"id", e.id}, {"who", e.who}, {"profile", e.profile}, {"command", e.command}, {"output", e.output},
+                {"at", e.at}, {"exitCode", e.exitCode}, {"timedOut", e.timedOut}, {"cancelled", e.cancelled}}
+               .dump()
+        << "\n";
+}
+
+void App::StartConsoleCommand(const Subserver& subserver, const Channel& channel, Console::Profile profile,
+                              const std::string& command, const std::string& who)
+{
+    ConsoleState& state = ConsoleFor(subserver, channel);
+    state.open = true;
+    state.scroll = true;
+    const std::vector<std::string> secrets = KnownSecrets();
+    ConsoleEntry entry;
+    entry.id = Platform::NewId();
+    entry.who = who;
+    entry.profile = Console::ProfileName(profile);
+    entry.command = Console::Mask(command, secrets);
+    entry.at = Platform::NowIsoUtc();
+
+    Console::Prepared prepared;
+    if (!IsDirectory(subserver.codePath))
+        prepared.error = "Ce sous-serveur n'a pas de dossier de code (bouton « Sources »).";
+    else
+        prepared = Console::Prepare(profile, command, m_store.Root() / "runtime" / "console");
+    if (!prepared.error.empty())
+    {
+        entry.output = prepared.error;
+        entry.exitCode = -1;
+        state.entries.push_back(entry);
+        SaveConsoleEntry(subserver.id, channel.id, entry);
+        if (who != "user")
+            PostSystem(subserver.id, channel.id, "Console : " + prepared.error);
+        return;
+    }
+
+    entry.running = true;
+    state.entries.push_back(entry);
+    auto run = std::make_unique<ConsoleRun>();
+    run->subserverId = subserver.id;
+    run->channelId = channel.id;
+    run->entryId = entry.id;
+    run->who = who;
+    run->script = prepared.script;
+    std::vector<std::wstring> env = Console::SecretEnvRemovals();
+    env.push_back(L"NO_COLOR=1");
+    env.push_back(L"GIT_TERMINAL_PROMPT=0");
+    ConsoleRun* raw = run.get();
+    const std::wstring dir = Platform::Widen(subserver.codePath);
+    run->thread = std::thread([raw, args = prepared.args, dir, env] {
+        Process::Result r = Process::Run(args, dir, "", [raw](const std::string& line) {
+            std::lock_guard<std::mutex> lock(raw->mutex);
+            raw->output += line + "\n";
+            if (raw->output.size() > 60000)
+                raw->output.erase(0, raw->output.size() - 50000);
+        }, raw->cancel, env, Console::kTimeoutSeconds);
+        {
+            std::lock_guard<std::mutex> lock(raw->mutex);
+            raw->result = std::move(r);
+        }
+        raw->done = true;
+    });
+    m_consoleRuns.push_back(std::move(run));
+}
+
+void App::PollConsoles()
+{
+    if (m_consoleRuns.empty())
+        return;
+    const std::vector<std::string> secrets = KnownSecrets();
+    for (auto it = m_consoleRuns.begin(); it != m_consoleRuns.end();)
+    {
+        ConsoleRun& run = **it;
+        ConsoleEntry* entry = nullptr;
+        if (auto st = m_consoles.find(run.channelId); st != m_consoles.end())
+            for (ConsoleEntry& e : st->second.entries)
+                if (e.id == run.entryId)
+                    entry = &e;
+        const bool finished = run.done.load();
+        std::string output;
+        {
+            std::lock_guard<std::mutex> lock(run.mutex);
+            if (!finished && run.output.size() == run.shownSize)
+            {
+                ++it;
+                continue;
+            }
+            run.shownSize = run.output.size();
+            output = run.output;
+        }
+        if (!finished)
+        {
+            if (entry)
+                entry->output = Console::Mask(output.size() > 20000 ? output.substr(output.size() - 20000) : output, secrets);
+            ++it;
+            continue;
+        }
+        run.thread.join();
+        std::error_code ec;
+        if (!run.script.empty())
+            fs::remove(run.script, ec);
+        const Process::Result& r = run.result;
+        if (!r.stderrText.empty())
+            output += (output.empty() ? "" : "\n") + std::string("[sortie d'erreur]\n") + r.stderrText;
+        if (!r.started)
+            output += r.error;
+        if (output.size() > 20000)
+            output = "[…]\n" + output.substr(output.size() - 20000);
+        output = Console::Mask(output, secrets);
+        if (entry)
+        {
+            entry->output = output;
+            entry->running = false;
+            entry->exitCode = r.started ? static_cast<long long>(r.exitCode) : -1;
+            entry->timedOut = r.timedOut;
+            entry->cancelled = r.cancelled;
+            SaveConsoleEntry(run.subserverId, run.channelId, *entry);
+            m_consoles[run.channelId].scroll = true;
+        }
+        if (run.who != "user")
+        {
+            // The AI that asked gets its own command's (masked) output, then continues.
+            const std::string status = r.timedOut ? "délai dépassé" : r.cancelled ? "arrêtée" : "code " + std::to_string(r.exitCode);
+            const std::string tail = output.size() > 4000 ? "[…]\n" + output.substr(output.size() - 4000) : output;
+            PostSystem(run.subserverId, run.channelId,
+                       "Console (" + (entry ? entry->profile : std::string()) + ") : " + (entry ? entry->command : std::string()) +
+                           " → " + status + "\n```\n" + tail + "\n```");
+            Subserver* sub = m_store.FindSubserver(run.subserverId);
+            Channel* ch = sub ? m_store.FindChannel(*sub, run.channelId) : nullptr;
+            if (sub && ch && !m_conductor.Busy())
+                StartJob(*sub, *ch, {run.who});
+        }
+        it = m_consoleRuns.erase(it);
+    }
+}
+
+void App::DrawConsole(Subserver& subserver, Channel& channel, float width, float height)
+{
+    ConsoleState& state = ConsoleFor(subserver, channel);
+    const bool hasDir = IsDirectory(subserver.codePath);
+    bool running = false;
+    for (const auto& run : m_consoleRuns)
+        if (run->channelId == channel.id)
+            running = true;
+
+    ImGui::PushID("console");
+    if (ImGui::SmallButton(state.open ? "Masquer la console" : "Console"))
+        state.open = !state.open;
+    ImGui::SameLine();
+    if (hasDir)
+        ImGui::TextColored(kColDim, "dans %s", subserver.codePath.c_str());
+    else
+        ImGui::TextColored(kColWarn, "pas de dossier de code (bouton « Sources »)");
+    if (running)
+    {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, kColError);
+        if (ImGui::SmallButton("Arrêter la commande"))
+            for (auto& run : m_consoleRuns)
+                if (run->channelId == channel.id)
+                    run->cancel = true;
+        ImGui::PopStyleColor();
+    }
+    if (!state.open)
+    {
+        ImGui::PopID();
+        return;
+    }
+
+    const float inputRow = ImGui::GetFrameHeightWithSpacing();
+    const float outputHeight = std::max(40.0f, height - ImGui::GetFrameHeightWithSpacing() - inputRow - ImGui::GetStyle().ItemSpacing.y);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColChannels);
+    ImGui::BeginChild("##consoleOutput", ImVec2(width, outputHeight), ImGuiChildFlags_None);
+    if (state.entries.empty())
+        ImGui::TextColored(kColDim, "Une commande = un processus, dans le dossier ci-dessus, 10 minutes au plus. "
+                                    "Les variables d'environnement secrètes sont retirées et les clés sont masquées.");
+    for (ConsoleEntry& e : state.entries)
+    {
+        ImGui::PushID(e.id.c_str());
+        const bool mine = e.who == "user";
+        if (mine)
+            ImGui::TextColored(kColDim, "toi");
+        else
+            ImGui::TextColored(ParticipantFor(e.who).color, "%s", ParticipantFor(e.who).name);
+        ImGui::SameLine();
+        ImGui::TextColored(kColDim, "[%s] %s", e.profile.c_str(), Platform::LocalTimeOfDay(e.at).c_str());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::Text("> %s", e.command.c_str());
+        if (!e.output.empty())
+            ImGui::TextUnformatted(e.output.c_str());
+        ImGui::PopTextWrapPos();
+        if (e.running)
+            ImGui::TextColored(kColDim, "en cours…");
+        else
+        {
+            const std::string status = e.timedOut ? "délai dépassé" : e.cancelled ? "arrêtée" : "code " + std::to_string(e.exitCode);
+            ImGui::TextColored(e.exitCode == 0 && !e.timedOut && !e.cancelled ? kColOk : kColError, "%s", status.c_str());
+            if (mine && !e.shared)
+            {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Partager avec le salon"))
+                {
+                    e.shared = true;
+                    const std::string tail = e.output.size() > 4000 ? "[…]\n" + e.output.substr(e.output.size() - 4000) : e.output;
+                    m_store.AppendMessage(subserver, channel, "user",
+                                          "Sortie de ma console (" + e.profile + ") : " + e.command + " → " + status + "\n```\n" + tail + "\n```");
+                    m_scrollToBottom = true;
+                }
+            }
+        }
+        ImGui::Separator();
+        ImGui::PopID();
+    }
+    if (state.scroll)
+    {
+        ImGui::SetScrollHereY(1.0f);
+        state.scroll = false;
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
+    static const char* kProfiles[] = {"CMD", "PowerShell", "gcloud"};
+    ImGui::SetNextItemWidth(120.0f * ImGui::GetStyle().FontScaleDpi);
+    ImGui::Combo("##profile", &state.profile, kProfiles, 3);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::BeginDisabled(!hasDir);
+    const bool submitted = ImGui::InputTextWithHint("##consoleInput", "Commande, Entrée pour lancer", &state.input,
+                                                    ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::EndDisabled();
+    if (submitted && !Trim(state.input).empty())
+    {
+        StartConsoleCommand(subserver, channel, static_cast<Console::Profile>(state.profile), Trim(state.input), "user");
+        state.input.clear();
+        ImGui::SetKeyboardFocusHere(-1);
+    }
+    ImGui::PopID();
 }
 
 void App::DrawGitHubDialog()

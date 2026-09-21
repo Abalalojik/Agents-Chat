@@ -22,6 +22,8 @@ jongler entre trois applications, en utilisant leurs points d'accès officiels d
 - Sous-serveur intégré « Amélioration d’Agents Chat » : les IA de son salon Code modifient l'application,
   la compilent et lancent ses tests, puis proposent de l'installer (seulement si les tests passent,
   avec retour arrière) ou d'ouvrir une pull request.
+- Console dans les salons Code (CMD, PowerShell, gcloud) : une commande = un processus dans le dossier du projet,
+  10 minutes au plus, variables secrètes retirées et clés masquées ; les commandes des IA passent par la boîte aux lettres.
 - Todo transversale par personne, réaffectation/statut, et PM local dédié avec chaque IA.
 - Salons Bugs GitHub synchronisés avec les issues via `gh` (déjà connecté, aucun jeton stocké) :
   import en tâches « #N », création, commentaire, et fermeture seulement après ta vérification des tests.
@@ -109,6 +111,8 @@ avant de la lancer.
 | `src/Conductor.cpp` | Tour de parole des IA, rôles, outils en texte |
 | `src/Backends.cpp` | Appels aux CLI officielles (Claude Code, Codex, Gemini/Antigravity) et aux API |
 | `src/CodeWorker.cpp` | Agents de code lancés dans le dossier du projet |
+| `src/Console.cpp` | Console des salons Code : préparation, environnement nettoyé, masquage des secrets |
+| `src/ShortContext.cpp` | Contexte court local (pertinence BM25) |
 | `src/Tools.cpp` | Outils des IA, confinement des chemins, zones vault/lore |
 | `src/ModelCatalog.cpp` | Catalogue des modèles et niveaux de réflexion |
 | `src/GitHub.cpp` | Issues et pull requests via `gh` |

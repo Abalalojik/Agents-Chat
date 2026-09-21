@@ -50,6 +50,7 @@ namespace Process
     namespace
     {
         // Current environment block plus additions (sorted order is not required by CreateProcess).
+        // An extra entry "-NAME" removes NAME instead of setting it.
         std::wstring BuildEnvironment(const std::vector<std::wstring>& extra)
         {
             std::wstring block;
@@ -60,6 +61,13 @@ namespace Process
                 bool overridden = false;
                 for (const std::wstring& e : extra)
                 {
+                    if (!e.empty() && e[0] == L'-')
+                    {
+                        const size_t len = e.size() - 1;
+                        if (entry.size() > len && entry[len] == L'=' && _wcsnicmp(entry.c_str(), e.c_str() + 1, len) == 0)
+                            overridden = true;
+                        continue;
+                    }
                     const size_t eq = e.find(L'=');
                     if (eq != std::wstring::npos && _wcsnicmp(entry.c_str(), e.c_str(), eq + 1) == 0)
                         overridden = true;
@@ -73,6 +81,8 @@ namespace Process
             FreeEnvironmentStringsW(env);
             for (const std::wstring& e : extra)
             {
+                if (!e.empty() && e[0] == L'-')
+                    continue;
                 block += e;
                 block.push_back(L'\0');
             }

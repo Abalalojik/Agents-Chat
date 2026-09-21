@@ -159,6 +159,18 @@ std::string Settings::ApiKey(const std::string& provider) const
     return it == m_apiKeys.end() ? std::string() : Secrets::Unprotect(it->second);
 }
 
+std::vector<std::string> Settings::AllApiKeys() const
+{
+    std::vector<std::string> out;
+    for (const auto& [provider, protectedKey] : m_apiKeys)
+    {
+        const std::string plain = Secrets::Unprotect(protectedKey);
+        if (!plain.empty())
+            out.push_back(plain);
+    }
+    return out;
+}
+
 bool Settings::SetApiKey(const std::string& provider, const std::string& plainKey)
 {
     const auto previous = m_apiKeys;

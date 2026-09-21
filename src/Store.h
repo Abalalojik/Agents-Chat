@@ -104,6 +104,12 @@ public:
     void SetError(const std::string& e) { m_lastError = e; }
     void ClearError() { m_lastError.clear(); }
 
+    // Folder of a salon's own files (transcript, console history).
+    std::filesystem::path ChannelDir(const Subserver& subserver, const Channel& channel) const
+    {
+        return TranscriptPath(subserver, channel).parent_path();
+    }
+
 private:
     bool SaveWorkspace();
     bool SaveInbox();

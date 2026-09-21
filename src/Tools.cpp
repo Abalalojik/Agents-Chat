@@ -221,6 +221,10 @@ namespace Tools
                  "{\"action\": \"proposer_fermeture\", \"numero\": 12, \"preuve\": \"tests qui passent, commit\"} : "
                  "tout est soumis à l'utilisatrice ; une issue n'est fermée qu'après sa vérification des tests. "
                  "Exige le rôle « Gérer les issues GitHub ». Les tâches « #N titre » du salon sont les issues synchronisées.\n";
+        if (type == ChannelType::Code && hasCode)
+            g += "- console {\"profil\": \"PowerShell\"|\"CMD\"|\"gcloud\", \"commande\": \"une seule commande\"} : "
+                 "l'exécuter dans le dossier du projet (10 min max). Sauf commande déjà autorisée mot pour mot, "
+                 "l'utilisatrice l'approuve d'abord ; la sortie (secrets masqués) te revient ici.\n";
         if ((type == ChannelType::Code || type == ChannelType::Bugs) && hasCode)
             g += "- travail_code {\"instructions\": \"consignes précises et complètes\"} : confier un travail à ton agent de code "
                  "(ton jumeau), dans le dossier du projet. Il ne démarre qu'avec l'accord de l'utilisatrice.\n";

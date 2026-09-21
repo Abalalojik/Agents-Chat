@@ -3,6 +3,8 @@
 // Build target: AgentChatsTests. Exit code 0 = all passed.
 
 #include "../src/Conductor.h"
+#include "../src/Console.h"
+#include "../src/Process.h"
 #include "../src/GitHub.h"
 #include "../src/ReleaseSignature.h"
 #include "../src/ShortContext.h"
@@ -11,6 +13,8 @@
 #include "../src/Store.h"
 #include "../src/Tools.h"
 #include "../src/Updater.h"
+
+#include <windows.h>
 
 #include <algorithm>
 #include <chrono>
@@ -362,6 +366,61 @@ int main(int argc, char** argv)
     CHECK(GitHub::RepoSlug("https://github.com/Abalalojik/Agents-Chat.git") == "Abalalojik/Agents-Chat");
     CHECK(GitHub::RepoSlug("git@github.com:Abalalojik/Agents-Chat.git") == "Abalalojik/Agents-Chat");
     CHECK(GitHub::ContributionBranch("main", "20260921-101112") == "amelioration/20260921-101112");
+
+    // Console: secret-looking variables removed, keys masked, gcloud cannot chain, real runs.
+    {
+        CHECK(Console::IsSecretEnvName(L"GH_TOKEN"));
+        CHECK(Console::IsSecretEnvName(L"openai_api_key"));
+        CHECK(Console::IsSecretEnvName(L"AWS_SECRET_ACCESS_KEY"));
+        CHECK(Console::IsSecretEnvName(L"MY_PASSWORD"));
+        CHECK(!Console::IsSecretEnvName(L"PATH"));
+        CHECK(!Console::IsSecretEnvName(L"USERPROFILE"));
+        CHECK(!Console::IsSecretEnvName(L"SystemRoot"));
+        const std::string masked = Console::Mask("key sk-ant-abcdefghijklmnopqrstuv and ghp_abcdefghijklmnopqrstuvwxyz1234 "
+                                                 "AIzaSyA1234567890abcdefghijklmnopqrstu Authorization: Bearer abc.def "
+                                                 "mine=Sup3rS3cretValue ok",
+                                                 {"Sup3rS3cretValue"});
+        CHECK(masked.find("sk-ant-abc") == std::string::npos);
+        CHECK(masked.find("ghp_abc") == std::string::npos);
+        CHECK(masked.find("AIzaSy") == std::string::npos);
+        CHECK(masked.find("abc.def") == std::string::npos);
+        CHECK(masked.find("Sup3rS3cretValue") == std::string::npos);
+        CHECK(masked.find(" ok") != std::string::npos);
+        std::string why;
+        CHECK(Console::ValidGcloud("gcloud config list", why));
+        CHECK(!Console::ValidGcloud("gcloud config list & del x", why));
+        CHECK(!Console::ValidGcloud("gcloud a | b", why));
+        CHECK(!Console::ValidGcloud("gcloud $(x)", why));
+        CHECK(!Console::ValidGcloud("dir", why));
+        CHECK(!Console::Prepare(Console::Profile::Gcloud, "del *", fs::temp_directory_path()).error.empty());
+
+        const fs::path consoleRoot = fs::temp_directory_path() / "agentchats-console-tests";
+        std::error_code consoleEc;
+        fs::create_directories(consoleRoot / "work", consoleEc);
+        SetEnvironmentVariableW(L"AGENTCHATS_TEST_TOKEN", L"do-not-leak-0123456789");
+        std::vector<std::wstring> env = Console::SecretEnvRemovals();
+        auto runConsole = [&](Console::Profile profile, const std::string& command, std::string& out) {
+            const Console::Prepared prepared = Console::Prepare(profile, command, consoleRoot / "scripts");
+            std::atomic<bool> noCancel{false};
+            out.clear();
+            const Process::Result r = Process::Run(prepared.args, (consoleRoot / "work").wstring(), "",
+                                                   [&](const std::string& line) { out += line + "\n"; }, noCancel, env, 60);
+            if (!prepared.script.empty())
+                fs::remove(prepared.script, consoleEc);
+            return prepared.error.empty() && r.started && r.exitCode == 0;
+        };
+        std::string out;
+        CHECK(runConsole(Console::Profile::PowerShell, "Write-Output \"[$env:AGENTCHATS_TEST_TOKEN]\"; Write-Output 'héllo « ok »'", out));
+        CHECK(out.find("do-not-leak") == std::string::npos);
+        CHECK(out.find("[]") != std::string::npos);
+        CHECK(out.find("héllo « ok »") != std::string::npos);
+        CHECK(runConsole(Console::Profile::Cmd, "echo [%AGENTCHATS_TEST_TOKEN%] & cd", out));
+        CHECK(out.find("do-not-leak") == std::string::npos);
+        CHECK(out.find("agentchats-console-tests") != std::string::npos); // ran in the salon folder
+        CHECK(!runConsole(Console::Profile::Cmd, "exit /b 3", out));
+        SetEnvironmentVariableW(L"AGENTCHATS_TEST_TOKEN", nullptr);
+        fs::remove_all(consoleRoot, consoleEc);
+    }
 
     // Short context: accent folding, stop words, relevance, and the thread budget.
     {
