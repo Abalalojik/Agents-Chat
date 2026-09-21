@@ -14,7 +14,11 @@
 #include "../src/Tools.h"
 #include "../src/Updater.h"
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <cstdlib>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -397,7 +401,11 @@ int main(int argc, char** argv)
         const fs::path consoleRoot = fs::temp_directory_path() / "agentchats-console-tests";
         std::error_code consoleEc;
         fs::create_directories(consoleRoot / "work", consoleEc);
+#ifdef _WIN32
         SetEnvironmentVariableW(L"AGENTCHATS_TEST_TOKEN", L"do-not-leak-0123456789");
+#else
+        setenv("AGENTCHATS_TEST_TOKEN", "do-not-leak-0123456789", 1);
+#endif
         std::vector<std::wstring> env = Console::SecretEnvRemovals();
         auto runConsole = [&](Console::Profile profile, const std::string& command, std::string& out) {
             const Console::Prepared prepared = Console::Prepare(profile, command, consoleRoot / "scripts");
@@ -410,15 +418,28 @@ int main(int argc, char** argv)
             return prepared.error.empty() && r.started && r.exitCode == 0;
         };
         std::string out;
-        CHECK(runConsole(Console::Profile::PowerShell, "Write-Output \"[$env:AGENTCHATS_TEST_TOKEN]\"; Write-Output 'héllo « ok »'", out));
-        CHECK(out.find("do-not-leak") == std::string::npos);
-        CHECK(out.find("[]") != std::string::npos);
-        CHECK(out.find("héllo « ok »") != std::string::npos);
+        // PowerShell is always there on Windows; on Linux only when pwsh is installed.
+        if (!Console::Prepare(Console::Profile::PowerShell, "Write-Output 1", consoleRoot / "scripts").args.empty())
+        {
+            CHECK(runConsole(Console::Profile::PowerShell, "Write-Output \"[$env:AGENTCHATS_TEST_TOKEN]\"; Write-Output 'héllo « ok »'", out));
+            CHECK(out.find("do-not-leak") == std::string::npos);
+            CHECK(out.find("[]") != std::string::npos);
+            CHECK(out.find("héllo « ok »") != std::string::npos);
+        }
+#ifdef _WIN32
         CHECK(runConsole(Console::Profile::Cmd, "echo [%AGENTCHATS_TEST_TOKEN%] & cd", out));
+#else
+        CHECK(runConsole(Console::Profile::Cmd, "echo \"[$AGENTCHATS_TEST_TOKEN]\"; pwd", out));
+#endif
         CHECK(out.find("do-not-leak") == std::string::npos);
         CHECK(out.find("agentchats-console-tests") != std::string::npos); // ran in the salon folder
+#ifdef _WIN32
         CHECK(!runConsole(Console::Profile::Cmd, "exit /b 3", out));
         SetEnvironmentVariableW(L"AGENTCHATS_TEST_TOKEN", nullptr);
+#else
+        CHECK(!runConsole(Console::Profile::Cmd, "exit 3", out));
+        unsetenv("AGENTCHATS_TEST_TOKEN");
+#endif
         fs::remove_all(consoleRoot, consoleEc);
     }
 
