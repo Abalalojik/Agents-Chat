@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-// The four kinds of channel. What an AI may do in a channel is decided by its
+// What an AI may do in a channel is decided by its
 // type (which tools it gets), never by prompt wording alone.
 enum class ChannelType
 {
@@ -11,6 +11,7 @@ enum class ChannelType
     Detente,           // casual chat; vault + lore read-only, no write tool
     ConsolidationLore, // may modify lore files (diff card)
     Code,              // only type allowed to send instructions to code agents
+    Bugs,              // issue triage and fixes, backed by the project's GitHub repository
 };
 
 // How strong (and costly) a model to use. A settings table maps each level to a

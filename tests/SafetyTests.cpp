@@ -193,6 +193,14 @@ int main(int argc, char** argv)
     CHECK(store.EnsureSelfImprovementSubserver(Platform::Narrow(base.wstring())));
     CHECK(store.Subservers().size() == withSelfWorkspace);
 
+    // Tasks are shared across channels and can be reassigned from the global todo.
+    const TaskItem* task = channel ? store.AddTask(channel->id, "Vérifier le bug", "user", "user") : nullptr;
+    CHECK(task != nullptr && store.AllTasks().size() == 1);
+    const std::string taskId = task ? task->id : std::string();
+    CHECK(store.SetTaskAssignee(taskId, "chatgpt"));
+    CHECK(store.AllTasks()[0].assignee == "chatgpt");
+    CHECK(ChannelTypeFromKey("bugs", channel->type) && channel->type == ChannelType::Bugs);
+
     fs::remove_all(base, ec);
     std::printf(g_failures == 0 ? "Tous les tests passent.\n" : "%d test(s) en échec.\n", g_failures);
     return g_failures == 0 ? 0 : 1;

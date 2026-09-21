@@ -25,6 +25,7 @@ const char* ChannelTypeLabel(ChannelType type)
     case ChannelType::Detente: return "Détente";
     case ChannelType::ConsolidationLore: return "Consolidation lore";
     case ChannelType::Code: return "Code";
+    case ChannelType::Bugs: return "Bugs GitHub";
     }
     return "?";
 }
@@ -37,13 +38,15 @@ const char* ChannelTypeKey(ChannelType type)
     case ChannelType::Detente: return "detente";
     case ChannelType::ConsolidationLore: return "consolidation_lore";
     case ChannelType::Code: return "code";
+    case ChannelType::Bugs: return "bugs";
     }
     return "detente";
 }
 
 bool ChannelTypeFromKey(const std::string& key, ChannelType& out)
 {
-    for (ChannelType t : {ChannelType::Analyse, ChannelType::Detente, ChannelType::ConsolidationLore, ChannelType::Code})
+    for (ChannelType t : {ChannelType::Analyse, ChannelType::Detente, ChannelType::ConsolidationLore, ChannelType::Code,
+                          ChannelType::Bugs})
     {
         if (key == ChannelTypeKey(t))
         {
@@ -102,6 +105,7 @@ ModelLevel DefaultLevelFor(ChannelType type)
     case ChannelType::Analyse: return ModelLevel::Fort;
     case ChannelType::ConsolidationLore: return ModelLevel::Fort;
     case ChannelType::Code: return ModelLevel::Normal;
+    case ChannelType::Bugs: return ModelLevel::Normal;
     }
     return ModelLevel::Normal;
 }
@@ -433,10 +437,11 @@ Channel* Store::CreateChannel(Subserver& subserver, const std::string& name, Cha
     ch.language = language;
     ch.level = DefaultLevelFor(type);
     // Product-wide division of labour. It remains editable per salon.
-    ch.roles["chatgpt"] = {"Développeur", kRolePresets[1].instructions, type == ChannelType::Code};
-    ch.roles["claude"] = {type == ChannelType::Code ? "Architecte" : "Chef d'équipe",
-                           type == ChannelType::Code ? kRolePresets[4].instructions : kRolePresets[0].instructions,
-                           type != ChannelType::Code};
+    const bool engineering = type == ChannelType::Code || type == ChannelType::Bugs;
+    ch.roles["chatgpt"] = {"Développeur", kRolePresets[1].instructions, engineering};
+    ch.roles["claude"] = {engineering ? "Architecte" : "Chef d'équipe",
+                           engineering ? kRolePresets[4].instructions : kRolePresets[0].instructions,
+                           !engineering};
     ch.roles["gemini"] = {"Chercheur", kRolePresets[5].instructions, false};
     subserver.channels.push_back(std::move(ch));
     if (!SaveWorkspace())
@@ -936,6 +941,25 @@ bool Store::SetTaskStatus(const std::string& channelId, const std::string& idOrT
             continue;
         const TaskItem previous = t;
         t.status = status;
+        t.updatedAt = Platform::NowIsoUtc();
+        if (!SaveTasks())
+        {
+            t = previous;
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool Store::SetTaskAssignee(const std::string& id, const std::string& assignee)
+{
+    for (TaskItem& t : m_tasks)
+    {
+        if (t.id != id)
+            continue;
+        const TaskItem previous = t;
+        t.assignee = assignee;
         t.updatedAt = Platform::NowIsoUtc();
         if (!SaveTasks())
         {

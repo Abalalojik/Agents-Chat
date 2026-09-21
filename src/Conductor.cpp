@@ -44,6 +44,10 @@ namespace
             return "C'est un salon CODE : tu coordonnes un travail de programmation. Tu ne modifies aucun fichier "
                    "toi-même : tu planifies, tu découpes, tu confies le travail à ton agent de code avec l'outil "
                    "travail_code, puis tu vérifies ses résultats.";
+        case ChannelType::Bugs:
+            return "C'est un salon BUGS GITHUB : tu qualifies les anomalies, demandes une reproduction précise, "
+                   "relies chaque correction à une issue GitHub et à une tâche locale, puis tu confies l'implémentation "
+                   "à l'agent de code avec travail_code. Tu vérifies tests et non-régression avant de déclarer le bug résolu.";
         }
         return "";
     }

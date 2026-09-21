@@ -73,11 +73,13 @@ public:
     std::vector<const MemoryNote*> MemoryFor(const std::string& subserverId, const std::string& channelId) const;
 
     // Tableau des tâches
+    const std::vector<TaskItem>& AllTasks() const { return m_tasks; }
     std::vector<TaskItem> Tasks(const std::string& channelId) const;
     const TaskItem* AddTask(const std::string& channelId, const std::string& title, const std::string& assignee,
                             const std::string& createdBy);
     // Finds by id, or else by title (case-insensitive) in the salon.
     bool SetTaskStatus(const std::string& channelId, const std::string& idOrTitle, const std::string& status);
+    bool SetTaskAssignee(const std::string& id, const std::string& assignee);
     bool DeleteTask(const std::string& id);
 
     const std::filesystem::path& Root() const { return m_root; }

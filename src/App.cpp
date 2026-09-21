@@ -8,6 +8,7 @@
 #include <imgui_stdlib.h>
 #include <nlohmann/json.hpp>
 #include <windows.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -23,7 +24,7 @@ namespace
     constexpr float kMembersColumnWidth = 250.0f;
 
     constexpr ChannelType kChannelTypes[] = {
-        ChannelType::Analyse, ChannelType::Detente, ChannelType::ConsolidationLore, ChannelType::Code};
+        ChannelType::Analyse, ChannelType::Detente, ChannelType::ConsolidationLore, ChannelType::Code, ChannelType::Bugs};
     constexpr ModelLevel kLevels[] = {ModelLevel::Leger, ModelLevel::Normal, ModelLevel::Fort};
 
     const char* kPlanAis[] = {"claude", "chatgpt", "gemini"};    // run on her plans (CLIs)
@@ -80,6 +81,28 @@ namespace
             return {};
         const auto last = s.find_last_not_of(" \t\r\n");
         return s.substr(first, last - first + 1);
+    }
+
+    std::string GithubUrlFor(const std::string& codePath)
+    {
+        const std::wstring git = Process::FindOnPath(L"git.exe");
+        if (git.empty() || codePath.empty())
+            return {};
+        std::string remote;
+        std::atomic<bool> cancel{false};
+        const Process::Result result = Process::Run({git, L"config", L"--get", L"remote.origin.url"},
+                                                    Platform::Widen(codePath), "",
+                                                    [&](const std::string& line) { if (remote.empty()) remote = Trim(line); },
+                                                    cancel, {}, 10);
+        if (!result.started || result.exitCode != 0 || remote.empty())
+            return {};
+        if (remote.rfind("git@github.com:", 0) == 0)
+            remote = "https://github.com/" + remote.substr(15);
+        else if (remote.rfind("ssh://git@github.com/", 0) == 0)
+            remote = "https://github.com/" + remote.substr(21);
+        if (remote.size() > 4 && remote.substr(remote.size() - 4) == ".git")
+            remote.resize(remote.size() - 4);
+        return remote.rfind("https://github.com/", 0) == 0 ? remote : std::string();
     }
 
     std::string Initials(const std::string& name)
@@ -416,7 +439,10 @@ void App::DrawSubserverColumn(float height)
 
     ImGui::PushStyleColor(ImGuiCol_Button, m_showInbox ? kColAccent : kColChat);
     if (ImGui::Button("@##inbox", ImVec2(button, button)))
+    {
         m_showInbox = true;
+        m_showTodo = false;
+    }
     ImGui::PopStyleColor();
     Badge(m_store.PendingInboxCount());
     ImGui::SetItemTooltip("Boîte aux lettres");
@@ -431,6 +457,7 @@ void App::DrawSubserverColumn(float height)
         if (ImGui::Button(Initials(sub.name).c_str(), ImVec2(button, button)))
         {
             m_showInbox = false;
+            m_showTodo = false;
             if (m_selectedSubserver != sub.id)
             {
                 m_selectedSubserver = sub.id;
@@ -487,7 +514,7 @@ void App::DrawChannelColumn(float height)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f * scale, 12.0f * scale));
     ImGui::BeginChild("##channels", ImVec2(kChannelColumnWidth * scale, height), ImGuiChildFlags_AlwaysUseWindowPadding);
 
-    Subserver* sub = m_showInbox ? nullptr : m_store.FindSubserver(m_selectedSubserver);
+    Subserver* sub = (m_showInbox || m_showTodo) ? nullptr : m_store.FindSubserver(m_selectedSubserver);
     if (m_showInbox)
     {
         ImGui::TextUnformatted("Boîte aux lettres");
@@ -495,6 +522,12 @@ void App::DrawChannelColumn(float height)
         ImGui::TextColored(kColDim, "Les demandes qui te sont\nadressées, tous sous-serveurs\nconfondus.");
         ImGui::Spacing();
         ImGui::Checkbox("Voir les demandes traitées", &m_showInboxHistory);
+    }
+    else if (m_showTodo)
+    {
+        ImGui::TextUnformatted("PM & tâches");
+        ImGui::Separator();
+        ImGui::TextColored(kColDim, "Une vue commune de ce que\nchacun a à faire, tous\nsalons confondus.");
     }
     else if (!sub)
     {
@@ -556,6 +589,7 @@ void App::DrawChannelColumn(float height)
                 if (ImGui::Selectable(label.c_str(), ch.id == m_selectedChannel))
                 {
                     m_selectedChannel = ch.id;
+                    m_showTodo = false;
                     m_scrollToBottom = true;
                 }
                 if (ImGui::BeginPopupContextItem("##chanMenu"))
@@ -617,6 +651,8 @@ void App::DrawCenter(float width, float height)
     Channel* ch = sub ? m_store.FindChannel(*sub, m_selectedChannel) : nullptr;
     if (m_showInbox)
         DrawInboxView();
+    else if (m_showTodo)
+        DrawTodoView();
     else if (sub && ch)
         DrawChannelView(*sub, *ch, ImGui::GetContentRegionAvail().x, inner);
     else
@@ -711,6 +747,27 @@ void App::DrawChannelView(Subserver& subserver, Channel& channel, float width, f
         ImGui::EndCombo();
     }
     ImGui::SetItemTooltip("Niveau de modèle des IA dans ce salon (réglable par IA dans « Membres »)");
+    if (channel.type == ChannelType::Bugs)
+    {
+        ImGui::SameLine();
+        if (ImGui::Button("Issues GitHub"))
+        {
+            const std::string repo = GithubUrlFor(subserver.codePath);
+            if (repo.empty())
+                m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
+            else
+                ShellExecuteW(nullptr, L"open", Platform::Widen(repo + "/issues").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Nouveau bug"))
+        {
+            const std::string repo = GithubUrlFor(subserver.codePath);
+            if (repo.empty())
+                m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
+            else
+                ShellExecuteW(nullptr, L"open", Platform::Widen(repo + "/issues/new").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
+    }
     ImGui::Separator();
 
     const bool busyHere = m_conductor.Busy() && m_jobChannel == channel.id;
@@ -1263,6 +1320,8 @@ void App::DrawMemberRow(Channel* channel, const std::string& ai, bool troupe)
     ImGui::Indent(indent);
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextColored(PresenceColor(chat.state), "%s", PresenceText(chat, true).c_str());
+    if (ImGui::SmallButton("PM / tâches"))
+        OpenTodo(ai);
     if (!troupe)
         if (const char* twin = CodeTwinOf(ai))
         {
@@ -1297,7 +1356,7 @@ void App::DrawMembersColumn(float height)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * scale, 12.0f * scale));
     ImGui::BeginChild("##members", ImVec2(kMembersColumnWidth * scale, height), ImGuiChildFlags_AlwaysUseWindowPadding);
 
-    Subserver* sub = m_showInbox ? nullptr : m_store.FindSubserver(m_selectedSubserver);
+    Subserver* sub = (m_showInbox || m_showTodo) ? nullptr : m_store.FindSubserver(m_selectedSubserver);
     Channel* channel = sub ? m_store.FindChannel(*sub, m_selectedChannel) : nullptr;
 
     ImGui::TextColored(kColDim, "MEMBRES");
@@ -1311,6 +1370,8 @@ void App::DrawMembersColumn(float height)
         ImGui::SameLine();
         ImGui::TextColored(ParticipantFor("user").color, "%s",
                            m_settings.UserName().empty() ? "Toi" : m_settings.UserName().c_str());
+        if (ImGui::SmallButton("Ma todo"))
+            OpenTodo("user");
         ImGui::Spacing();
     }
     for (const char* ai : kPlanAis)
@@ -1364,8 +1425,164 @@ void App::DrawTaskBoard(Channel& channel)
     if (ImGui::InputTextWithHint("##newTask", "Nouvelle tâche…", &m_newTaskTitle, ImGuiInputTextFlags_EnterReturnsTrue) &&
         !Trim(m_newTaskTitle).empty())
     {
-        m_store.AddTask(channel.id, Trim(m_newTaskTitle), "", "user");
+        m_store.AddTask(channel.id, Trim(m_newTaskTitle), "user", "user");
         m_newTaskTitle.clear();
+    }
+}
+
+void App::OpenTodo(const std::string& owner)
+{
+    m_todoOwner = owner;
+    m_showInbox = false;
+    m_showTodo = true;
+    if (m_todoChannel.empty())
+        m_todoChannel = m_selectedChannel;
+}
+
+void App::OpenPrivateMessage(const std::string& ai)
+{
+    Subserver* privateSub = nullptr;
+    for (const Subserver& candidate : m_store.Subservers())
+        if (candidate.name == "Messages privés")
+        {
+            privateSub = m_store.FindSubserver(candidate.id);
+            break;
+        }
+    if (!privateSub)
+        privateSub = m_store.CreateSubserver("Messages privés", "", "", "");
+    if (!privateSub)
+        return;
+
+    Channel* pm = nullptr;
+    const std::string name = AiDisplayName(ai);
+    for (Channel& candidate : privateSub->channels)
+        if (candidate.name == name)
+        {
+            pm = &candidate;
+            break;
+        }
+    if (!pm)
+        pm = m_store.CreateChannel(*privateSub, name, ChannelType::Detente, "Français");
+    if (!pm)
+        return;
+
+    TeamRole role{"Interlocuteur privé", "Tu réponds directement à l'utilisatrice dans ce PM.", true};
+    m_store.SetRole(*pm, ai, &role);
+    m_selectedSubserver = privateSub->id;
+    m_selectedChannel = pm->id;
+    m_showInbox = false;
+    m_showTodo = false;
+    m_scrollToBottom = true;
+}
+
+void App::DrawTodoView()
+{
+    const float scale = ImGui::GetStyle().FontScaleDpi;
+    ImGui::Text("PM & tâches — %s", AiDisplayName(m_todoOwner));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(150.0f * scale);
+    if (ImGui::BeginCombo("##todoOwner", AiDisplayName(m_todoOwner)))
+    {
+        for (const char* owner : {"user", "chatgpt", "claude", "gemini", "mistral", "deepseek", "grok"})
+            if (ImGui::Selectable(AiDisplayName(owner), m_todoOwner == owner))
+                m_todoOwner = owner;
+        ImGui::EndCombo();
+    }
+    if (m_todoOwner != "user")
+    {
+        ImGui::SameLine();
+        if (ImGui::Button((std::string("Ouvrir le PM avec ") + AiDisplayName(m_todoOwner)).c_str()))
+            OpenPrivateMessage(m_todoOwner);
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Afficher les tâches terminées", &m_todoShowDone);
+    ImGui::Separator();
+
+    struct LocatedTask { TaskItem task; std::string subserverId, subserverName, channelName; };
+    std::vector<LocatedTask> tasks;
+    for (const TaskItem& task : m_store.AllTasks())
+    {
+        if (task.assignee != m_todoOwner || (!m_todoShowDone && task.status == "fait"))
+            continue;
+        LocatedTask located{task, {}, "Projet inconnu", "Salon inconnu"};
+        for (const Subserver& sub : m_store.Subservers())
+            for (const Channel& channel : sub.channels)
+                if (channel.id == task.channelId)
+                {
+                    located.subserverId = sub.id;
+                    located.subserverName = sub.name;
+                    located.channelName = channel.name;
+                }
+        tasks.push_back(std::move(located));
+    }
+
+    ImGui::BeginChild("##todoList", ImVec2(0, ImGui::GetContentRegionAvail().y - 88.0f * scale), ImGuiChildFlags_Borders);
+    if (tasks.empty())
+        ImGui::TextColored(kColDim, "Aucune tâche %s.", m_todoShowDone ? "" : "active");
+    for (const LocatedTask& located : tasks)
+    {
+        const TaskItem& task = located.task;
+        ImGui::PushID(task.id.c_str());
+        ImGui::TextColored(TaskStatusColor(task.status), "●");
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", task.title.c_str());
+        ImGui::TextColored(kColDim, "%s  ·  # %s", located.subserverName.c_str(), located.channelName.c_str());
+        ImGui::SameLine();
+        if (!located.subserverId.empty() && ImGui::SmallButton("Ouvrir"))
+        {
+            m_selectedSubserver = located.subserverId;
+            m_selectedChannel = task.channelId;
+            m_showTodo = false;
+            m_scrollToBottom = true;
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(115.0f * scale);
+        if (ImGui::BeginCombo("##status", TaskStatusLabel(task.status)))
+        {
+            for (const char* status : {"a_faire", "en_cours", "fait", "bloque"})
+                if (ImGui::Selectable(TaskStatusLabel(status), task.status == status))
+                    m_store.SetTaskStatus(task.channelId, task.id, status);
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(115.0f * scale);
+        if (ImGui::BeginCombo("##assignee", AiDisplayName(task.assignee)))
+        {
+            for (const char* owner : {"user", "chatgpt", "claude", "gemini", "mistral", "deepseek", "grok"})
+                if (ImGui::Selectable(AiDisplayName(owner), task.assignee == owner))
+                    m_store.SetTaskAssignee(task.id, owner);
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Supprimer"))
+            m_store.DeleteTask(task.id);
+        ImGui::Separator();
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    if (m_todoChannel.empty())
+        m_todoChannel = m_selectedChannel;
+    ImGui::SetNextItemWidth(230.0f * scale);
+    if (ImGui::BeginCombo("##todoChannel", "Salon de destination"))
+    {
+        for (const Subserver& sub : m_store.Subservers())
+            for (const Channel& channel : sub.channels)
+            {
+                const std::string label = sub.name + " / # " + channel.name;
+                if (ImGui::Selectable(label.c_str(), m_todoChannel == channel.id))
+                    m_todoChannel = channel.id;
+            }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    const bool add = ImGui::InputTextWithHint("##todoNew", "Ajouter une tâche…", &m_todoNewTitle,
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+    if (add && !Trim(m_todoNewTitle).empty() && !m_todoChannel.empty())
+    {
+        m_store.AddTask(m_todoChannel, Trim(m_todoNewTitle), m_todoOwner, "user");
+        m_todoNewTitle.clear();
     }
 }
 
@@ -1409,7 +1626,11 @@ bool App::StartJob(Subserver& subserver, Channel& channel, const std::vector<std
     in.maxTurns = m_settings.MaxTurns();
 
     // Backend per AI
-    const bool geminiApi = m_settings.HasApiKey(Provider::GeminiApi) &&
+    // Subscription-first routing: the signed-in CLI uses the user's existing plan.
+    // A configured Gemini API key is only a fallback when the CLI is unavailable;
+    // never prefer token-billed traffic silently.
+    const bool geminiCli = m_settings.IsAvailable("gemini", "cli");
+    const bool geminiApi = !geminiCli && m_settings.HasApiKey(Provider::GeminiApi) &&
                            m_settings.GetPresence("gemini", "api").state != PresenceState::Offline;
     for (const std::string& ai : in.members)
     {
@@ -1700,7 +1921,7 @@ void App::HandleAction(const ConductorEvent& ev)
     }
     else if (name == "travail_code")
     {
-        if (ch->type != ChannelType::Code || !CodeTwinOf(ev.ai))
+        if ((ch->type != ChannelType::Code && ch->type != ChannelType::Bugs) || !CodeTwinOf(ev.ai))
         {
             PostSystem(sub->id, ch->id, who + " a voulu lancer un agent de code : ce n'est possible que dans un salon Code, "
                                             "pour ChatGPT, Claude et Gemini.");
@@ -1896,22 +2117,22 @@ void App::DrawCreateChannelPopup()
         ImGui::SetKeyboardFocusHere();
     ImGui::InputText("##name", &m_newChannelName);
     ImGui::TextUnformatted("Type");
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 5; ++i)
     {
         ImGui::RadioButton(ChannelTypeLabel(kChannelTypes[i]), &m_newChannelType, i);
-        if (i < 3)
+        if (i < 4)
             ImGui::SameLine();
     }
     ImGui::TextUnformatted("Langue des IA dans ce salon");
     LanguagePicker("##newChannelLanguage", m_newChannelLanguage, 200.0f * ImGui::GetStyle().FontScaleDpi);
 
-    const ChannelType type = kChannelTypes[std::clamp(m_newChannelType, 0, 3)];
+    const ChannelType type = kChannelTypes[std::clamp(m_newChannelType, 0, 4)];
     const char* missing = nullptr;
     if ((type == ChannelType::Analyse || type == ChannelType::Detente) && sub->vaultPath.empty())
         missing = "Ce sous-serveur n'a pas de vault : les IA n'auront rien à lire ou corriger.";
     else if (type == ChannelType::ConsolidationLore && sub->lorePath.empty())
         missing = "Ce sous-serveur n'a pas de dossier lore.";
-    else if (type == ChannelType::Code && sub->codePath.empty())
+    else if ((type == ChannelType::Code || type == ChannelType::Bugs) && sub->codePath.empty())
         missing = "Ce sous-serveur n'a pas de dossier de code.";
     if (missing)
         ImGui::TextColored(kColWarn, "%s", missing);

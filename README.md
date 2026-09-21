@@ -4,10 +4,13 @@ Application locale de coordination multi-agents (C++ / Dear ImGui) où ChatGPT, 
 discutent avec toi et se coordonnent, en pilotant leurs versions « code »
 (Codex, Claude Code, Gemini CLI) dans les salons Code.
 
+Ce n'est pas un clone ni un extracteur de ces services : c'est une interface unifiée pour éviter de
+jongler entre trois applications, en utilisant leurs points d'accès officiels déjà authentifiés.
+
 ## État actuel
 
 - Sous-serveurs avec leurs sources (vault Obsidian, dossier lore, dossier de code).
-- Salons des quatre types : Analyse, Détente, Consolidation lore, Code.
+- Salons Analyse, Détente, Consolidation lore, Code et Bugs GitHub.
 - Fil de messages et saisie (Entrée envoie, Ctrl+Entrée va à la ligne).
 - Transcript en ajout seul, un par salon.
 - Boîte aux lettres (vide pour l'instant) et liste des membres.
@@ -15,6 +18,8 @@ discutent avec toi et se coordonnent, en pilotant leurs versions « code »
   leur portée et les doublons équivalents sont fusionnés, même entre IA.
 - Sous-serveur intégré « Amélioration d’Agents Chat » avec un salon de retours et
   un salon Code relié automatiquement aux sources de l'application.
+- Todo transversale par personne, réaffectation/statut, et PM local dédié avec chaque IA.
+- Les salons Bugs GitHub ouvrent les issues du dépôt configuré sans stocker de jeton GitHub.
 - Langue et niveau de modèle (Léger / Normal / Fort) par salon ; niveau réglable par IA
   dans « Membres ».
 - Options → Modèles : pour chaque IA et chaque niveau, le modèle et le niveau de réflexion.
@@ -24,6 +29,10 @@ discutent avec toi et se coordonnent, en pilotant leurs versions « code »
 Les connexions ChatGPT/Codex, Claude/Claude Code, Gemini/Gemini CLI et plusieurs
 API compatibles sont prises en charge. Les travaux de code restent soumis à
 l'accord de l'utilisatrice.
+
+Le routage est **forfait d'abord** : Codex CLI, Claude Code et Gemini CLI sont prioritaires.
+Une clé Gemini API configurée ne sert de repli que si Gemini CLI est indisponible ; l'application
+ne remplace donc pas silencieusement un accès inclus dans un forfait par des appels facturés au token.
 
 ## Compiler
 
@@ -37,6 +46,9 @@ cmake --build build --config Release
 ```
 
 L'exécutable est `build\Release\AgentChats.exe`.
+
+Le port Linux n'est pas encore compilable : le noyau métier est largement réutilisable,
+mais l'hôte graphique et plusieurs services système sont Windows. Voir [PORTABILITY.md](PORTABILITY.md).
 
 ## Sécurité et secrets
 

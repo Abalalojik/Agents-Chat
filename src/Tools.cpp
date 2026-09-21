@@ -136,7 +136,7 @@ namespace Tools
             "- te_demander {\"question\": \"...\"} : poser une question qui attend sa décision.\n"
             "- tache {\"action\": \"creer\"|\"statut\", \"titre\": \"...\", \"assigne\": \"claude\", \"statut\": \"a_faire\"|\"en_cours\"|\"fait\"|\"bloque\"} : tableau des tâches du salon.\n"
             "- demander_skill {\"nom\": \"...\", \"besoin\": \"...\"} : demander un nouvel outil (il sera fabriqué dans l'Atelier si elle accepte).\n";
-        if (type != ChannelType::Code && (hasVault || hasLore))
+        if (type != ChannelType::Code && type != ChannelType::Bugs && (hasVault || hasLore))
         {
             g += "- lire_note {\"source\": \"vault\"|\"lore\", \"chemin\": \"dossier/Note.md\"}\n"
                  "- chercher {\"source\": \"vault\"|\"lore\", \"requete\": \"mots\"} : trouver les notes qui en parlent.\n"
@@ -148,7 +148,7 @@ namespace Tools
         if (type == ChannelType::ConsolidationLore && hasLore)
             g += "- proposer_correction {\"source\": \"lore\", \"chemin\": \"...\", \"ancien\": \"texte exact\", \"nouveau\": \"texte\"} : "
                  "modifier le lore (\"ancien\": \"\" pour créer une note).\n";
-        if (type == ChannelType::Code && hasCode)
+        if ((type == ChannelType::Code || type == ChannelType::Bugs) && hasCode)
             g += "- travail_code {\"instructions\": \"consignes précises et complètes\"} : confier un travail à ton agent de code "
                  "(ton jumeau), dans le dossier du projet. Il ne démarre qu'avec l'accord de l'utilisatrice.\n";
         return g;
@@ -369,8 +369,8 @@ namespace Tools
             catch (const std::exception& e) { return std::string("Cache bancaire illisible : ") + e.what(); }
         }
 
-        if (type == ChannelType::Code)
-            return "Pas d'accès au vault ni au lore dans un salon Code.";
+        if (type == ChannelType::Code || type == ChannelType::Bugs)
+            return "Pas d'accès au vault ni au lore dans un salon d'ingénierie.";
         const fs::path* root = RootFor(a, src);
         if (!root)
             return "Ce sous-serveur n'a pas de " + a.value("source", std::string("vault")) + ".";

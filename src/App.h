@@ -29,11 +29,14 @@ private:
     void DrawChannelView(Subserver& subserver, Channel& channel, float width, float height);
     void DrawMessage(Subserver& subserver, Channel& channel, const Message& msg);
     void DrawInboxView();
+    void DrawTodoView();
     void DrawInboxItem(const InboxItem& item);
     void DrawWelcome();
     void DrawErrorBar();
     void DrawTaskBoard(Channel& channel);
     void DrawMemberRow(Channel* channel, const std::string& ai, bool troupe);
+    void OpenTodo(const std::string& owner);
+    void OpenPrivateMessage(const std::string& ai);
 
     // Popups and windows
     void DrawCreateSubserverPopup();
@@ -75,6 +78,7 @@ private:
     std::string m_selectedSubserver;
     std::string m_selectedChannel;
     bool m_showInbox = false;
+    bool m_showTodo = false;
     bool m_showInboxHistory = false;
     std::string m_composer;
     std::map<std::string, size_t> m_shownCount;   // salon -> messages drawn
@@ -94,7 +98,6 @@ private:
     std::map<std::string, std::string> m_codeProgress; // job id -> last progress lines
     std::map<std::string, std::string> m_codeJobChannel;
     std::map<std::string, std::string> m_codeJobAi;
-
     // Availability detection (background)
     struct Availability
     {
@@ -137,4 +140,8 @@ private:
     bool m_generalLoaded = false;
     std::string m_memoryEditId, m_memoryEditText;
     std::string m_newTaskTitle;
+    std::string m_todoOwner = "user";
+    std::string m_todoNewTitle;
+    std::string m_todoChannel;
+    bool m_todoShowDone = false;
 };
