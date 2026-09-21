@@ -7,6 +7,7 @@
 #include "Updater.h"
 
 #include <atomic>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -133,6 +134,22 @@ private:
     std::string m_deleteSubserver, m_deleteChannel;
     bool m_openRename = false, m_openDelete = false;
     void DrawRenameDeletePopups();
+
+    // GitHub (Bugs salons), through the authenticated `gh` CLI, off the UI thread.
+    // `work` runs in the background and returns what to apply on the UI thread.
+    void RunGitHub(const std::string& label, std::function<std::function<void()>()> work);
+    void SyncIssues(const Subserver& subserver, const Channel& channel);
+    void DrawGitHubDialog();
+    void AcceptGitHubRequest(const InboxItem& item);
+    std::thread m_ghThread;
+    std::atomic<bool> m_ghBusy{false};
+    std::mutex m_ghMutex;
+    std::vector<std::function<void()>> m_ghDone;
+    std::string m_ghStatus;
+    // Dialog opened by the user from a task: "create", "comment" or "close".
+    std::string m_ghDialog, m_ghTaskId, m_ghTitle, m_ghBody;
+    bool m_ghTestsConfirmed = false, m_openGhDialog = false;
+    std::map<std::string, bool> m_ghInboxTests; // inbox item id -> tests confirmed
     bool m_openCreateSubserver = false;
     std::string m_newSubName, m_newSubVault, m_newSubLore, m_newSubCode;
     bool m_openEditSources = false;

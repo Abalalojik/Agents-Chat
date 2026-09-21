@@ -215,6 +215,12 @@ namespace Tools
         if (type == ChannelType::ConsolidationLore && hasLore)
             g += "- proposer_correction {\"source\": \"lore\", \"chemin\": \"...\", \"ancien\": \"texte exact\", \"nouveau\": \"texte\"} : "
                  "modifier le lore (\"ancien\": \"\" pour créer une note).\n";
+        if (type == ChannelType::Bugs)
+            g += "- github {\"action\": \"creer_issue\", \"titre\": \"...\", \"corps\": \"reproduction, attendu, observé\"} | "
+                 "{\"action\": \"commenter\", \"numero\": 12, \"texte\": \"...\"} | "
+                 "{\"action\": \"proposer_fermeture\", \"numero\": 12, \"preuve\": \"tests qui passent, commit\"} : "
+                 "tout est soumis à l'utilisatrice ; une issue n'est fermée qu'après sa vérification des tests. "
+                 "Exige le rôle « Gérer les issues GitHub ». Les tâches « #N titre » du salon sont les issues synchronisées.\n";
         if ((type == ChannelType::Code || type == ChannelType::Bugs) && hasCode)
             g += "- travail_code {\"instructions\": \"consignes précises et complètes\"} : confier un travail à ton agent de code "
                  "(ton jumeau), dans le dossier du projet. Il ne démarre qu'avec l'accord de l'utilisatrice.\n";

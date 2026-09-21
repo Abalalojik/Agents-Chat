@@ -261,8 +261,13 @@ bool Store::Load()
                                     m.value("text", ""), m.value("createdAt", "")});
         if (fs::exists(m_root / "tasks.json"))
             for (const json& t : ReadJson(m_root / "tasks.json").value("tasks", json::array()))
+            {
                 m_tasks.push_back({t.value("id", ""), t.value("channelId", ""), t.value("title", ""), t.value("assignee", ""),
                                    t.value("status", "a_faire"), t.value("createdBy", ""), t.value("updatedAt", "")});
+                m_tasks.back().issueNumber = t.value("issueNumber", 0);
+                m_tasks.back().issueUrl = t.value("issueUrl", "");
+                m_tasks.back().issueState = t.value("issueState", "");
+            }
     }
     catch (const std::exception& e)
     {
@@ -352,8 +357,17 @@ bool Store::SaveTasks()
 {
     json tasks = json::array();
     for (const TaskItem& t : m_tasks)
-        tasks.push_back({{"id", t.id}, {"channelId", t.channelId}, {"title", t.title}, {"assignee", t.assignee},
-                         {"status", t.status}, {"createdBy", t.createdBy}, {"updatedAt", t.updatedAt}});
+    {
+        json task = {{"id", t.id}, {"channelId", t.channelId}, {"title", t.title}, {"assignee", t.assignee},
+                     {"status", t.status}, {"createdBy", t.createdBy}, {"updatedAt", t.updatedAt}};
+        if (t.issueNumber > 0)
+        {
+            task["issueNumber"] = t.issueNumber;
+            task["issueUrl"] = t.issueUrl;
+            task["issueState"] = t.issueState;
+        }
+        tasks.push_back(task);
+    }
     return WriteFileAtomic(m_root / "tasks.json", json({{"version", 1}, {"tasks", tasks}}).dump(2));
 }
 
@@ -1000,6 +1014,84 @@ std::vector<TaskItem> Store::Tasks(const std::string& channelId) const
         if (t.channelId == channelId)
             out.push_back(t);
     return out;
+}
+
+const TaskItem* Store::FindTask(const std::string& id) const
+{
+    for (const TaskItem& t : m_tasks)
+        if (t.id == id)
+            return &t;
+    return nullptr;
+}
+
+bool Store::SetTaskIssue(const std::string& id, int number, const std::string& url, const std::string& state)
+{
+    for (TaskItem& t : m_tasks)
+    {
+        if (t.id != id)
+            continue;
+        const TaskItem previous = t;
+        t.issueNumber = number;
+        t.issueUrl = url;
+        t.issueState = state;
+        if (state == "CLOSED")
+            t.status = "fait";
+        t.updatedAt = Platform::NowIsoUtc();
+        if (!SaveTasks())
+        {
+            t = previous;
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+Store::IssueImport Store::ImportIssues(const std::string& channelId, const std::vector<GitHub::Issue>& issues)
+{
+    IssueImport result;
+    const auto previous = m_tasks;
+    for (const GitHub::Issue& issue : issues)
+    {
+        const std::string title = "#" + std::to_string(issue.number) + " " + issue.title;
+        TaskItem* existing = nullptr;
+        for (TaskItem& t : m_tasks)
+            if (t.channelId == channelId && t.issueNumber == issue.number)
+                existing = &t;
+        if (existing)
+        {
+            const bool closedNow = issue.state == "CLOSED" && existing->issueState != "CLOSED";
+            if (existing->title != title || existing->issueState != issue.state || existing->issueUrl != issue.url)
+            {
+                existing->title = title;
+                existing->issueState = issue.state;
+                existing->issueUrl = issue.url;
+                if (closedNow)
+                {
+                    existing->status = "fait";
+                    ++result.closed;
+                }
+                else
+                    ++result.updated;
+                existing->updatedAt = Platform::NowIsoUtc();
+            }
+        }
+        else if (issue.state == "OPEN")
+        {
+            TaskItem t{Platform::NewId(), channelId, title, "", "a_faire", "github", Platform::NowIsoUtc()};
+            t.issueNumber = issue.number;
+            t.issueUrl = issue.url;
+            t.issueState = issue.state;
+            m_tasks.push_back(std::move(t));
+            ++result.created;
+        }
+    }
+    if ((result.created || result.updated || result.closed) && !SaveTasks())
+    {
+        m_tasks = previous;
+        return {};
+    }
+    return result;
 }
 
 const TaskItem* Store::AddTask(const std::string& channelId, const std::string& title, const std::string& assignee,

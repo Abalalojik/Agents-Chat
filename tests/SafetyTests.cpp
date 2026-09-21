@@ -3,6 +3,7 @@
 // Build target: AgentChatsTests. Exit code 0 = all passed.
 
 #include "../src/Conductor.h"
+#include "../src/GitHub.h"
 #include "../src/Platform.h"
 #include "../src/Settings.h"
 #include "../src/Store.h"
@@ -27,6 +28,16 @@ static int g_failures = 0;
 
 int main(int argc, char** argv)
 {
+    if (argc > 2 && std::string(argv[1]) == "--github-read")
+    {
+        // Read-only: lists issues through the authenticated gh CLI.
+        std::vector<GitHub::Issue> issues;
+        const GitHub::Result r = GitHub::ListIssues(argv[2], issues);
+        std::printf("github-read %s: ok=%s issues=%zu error=%s\n", argv[2], r.ok ? "true" : "false", issues.size(), r.error.c_str());
+        for (size_t i = 0; i < issues.size() && i < 5; ++i)
+            std::printf("  #%d [%s] %s\n", issues[i].number, issues[i].state.c_str(), issues[i].title.c_str());
+        return r.ok ? 0 : 1;
+    }
     if (argc > 1 && std::string(argv[1]) == "--connections")
     {
         for (const std::string ai : {"claude", "chatgpt", "gemini"})
@@ -316,6 +327,39 @@ int main(int argc, char** argv)
     CHECK(ChannelTypeFromKey("bugs", channel->type) && channel->type == ChannelType::Bugs);
 
     fs::remove_all(base, ec);
+
+    // --- GitHub: repository slugs and issue import ------------------------------------------------
+    CHECK(GitHub::RepoSlug("https://github.com/Abalalojik/Agents-Chat") == "Abalalojik/Agents-Chat");
+    CHECK(GitHub::RepoSlug("https://github.com/Abalalojik/Agents-Chat.git") == "Abalalojik/Agents-Chat");
+    CHECK(GitHub::RepoSlug("git@github.com:Abalalojik/Agents-Chat.git") == "Abalalojik/Agents-Chat");
+    CHECK(GitHub::RepoSlug("https://github.com/Abalalojik/Agents-Chat/issues") == "Abalalojik/Agents-Chat");
+    CHECK(GitHub::RepoSlug("https://gitlab.com/a/b").empty());
+    CHECK(GitHub::RepoSlug("https://github.com/a b/c").empty());       // no spaces reach gh arguments
+    CHECK(GitHub::RepoSlug("https://github.com/owner").empty());
+    {
+        const fs::path issueRoot = fs::temp_directory_path() / "agentchats-issue-tests";
+        std::error_code issueEc;
+        fs::remove_all(issueRoot, issueEc);
+        fs::create_directories(issueRoot, issueEc);
+        Store issueStore(issueRoot);
+        std::vector<GitHub::Issue> issues = {{12, "Crash au démarrage", "OPEN", "https://github.com/o/r/issues/12", ""},
+                                             {13, "Déjà corrigée", "CLOSED", "https://github.com/o/r/issues/13", ""}};
+        Store::IssueImport firstImport = issueStore.ImportIssues("salon", issues);
+        CHECK(firstImport.created == 1);                   // closed issues unknown locally are not imported
+        CHECK(issueStore.Tasks("salon").size() == 1);
+        CHECK(issueStore.Tasks("salon")[0].issueNumber == 12);
+        CHECK(issueStore.Tasks("salon")[0].title == "#12 Crash au démarrage");
+        Store::IssueImport again = issueStore.ImportIssues("salon", issues);
+        CHECK(again.created == 0 && again.updated == 0 && again.closed == 0); // idempotent
+        issues[0].state = "CLOSED";
+        Store::IssueImport closed = issueStore.ImportIssues("salon", issues);
+        CHECK(closed.closed == 1);
+        CHECK(issueStore.Tasks("salon")[0].status == "fait");
+        Store issueReloaded(issueRoot);
+        CHECK(issueReloaded.Load());
+        CHECK(issueReloaded.Tasks("salon").size() == 1 && issueReloaded.Tasks("salon")[0].issueState == "CLOSED");
+        fs::remove_all(issueRoot, issueEc);
+    }
     std::printf(g_failures == 0 ? "Tous les tests passent.\n" : "%d test(s) en échec.\n", g_failures);
     return g_failures == 0 ? 0 : 1;
 }

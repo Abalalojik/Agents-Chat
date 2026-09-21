@@ -1,4 +1,5 @@
 #pragma once
+#include "GitHub.h"
 #include "Model.h"
 
 #include <filesystem>
@@ -85,6 +86,15 @@ public:
     bool SetTaskStatus(const std::string& channelId, const std::string& idOrTitle, const std::string& status);
     bool SetTaskAssignee(const std::string& id, const std::string& assignee);
     bool DeleteTask(const std::string& id);
+    const TaskItem* FindTask(const std::string& id) const;
+    bool SetTaskIssue(const std::string& id, int number, const std::string& url, const std::string& state);
+    // Brings a salon's board in line with the repository's issues: open issues
+    // become tasks, issues closed on GitHub mark their task done. Never touches GitHub.
+    struct IssueImport
+    {
+        int created = 0, updated = 0, closed = 0;
+    };
+    IssueImport ImportIssues(const std::string& channelId, const std::vector<GitHub::Issue>& issues);
 
     const std::filesystem::path& Root() const { return m_root; }
     const std::string& LastError() const { return m_lastError; }

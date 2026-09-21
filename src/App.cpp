@@ -1,4 +1,5 @@
 #include "App.h"
+#include "GitHub.h"
 #include "ModelCatalog.h"
 #include "OptionsModules.h"
 #include "Platform.h"
@@ -260,6 +261,7 @@ namespace
         if (kind == "file_write") return "Écriture de fichier";
         if (kind == "skill") return "Demande de compétence";
         if (kind == "code") return "Travail de code";
+        if (kind == "github") return "GitHub";
         return "Demande";
     }
 }
@@ -294,6 +296,8 @@ App::~App()
     m_codeWorker.StopAll();
     if (m_availThread.joinable())
         m_availThread.join();
+    if (m_ghThread.joinable())
+        m_ghThread.join();
 }
 
 void App::RefreshAvailability(const std::string& aiId)
@@ -449,6 +453,15 @@ void App::Frame()
     if (m_availReady.exchange(false))
         ApplyAvailability();
     ProcessEvents();
+    {
+        std::vector<std::function<void()>> done;
+        {
+            std::lock_guard<std::mutex> lock(m_ghMutex);
+            done.swap(m_ghDone);
+        }
+        for (auto& apply : done)
+            apply();
+    }
     if (m_startQueued && !m_conductor.Busy())
     {
         m_startQueued = false;
@@ -495,6 +508,7 @@ void App::Frame()
     DrawEditSourcesPopup();
     DrawCreateChannelPopup();
     DrawRenameDeletePopups();
+    DrawGitHubDialog();
     ImGui::End();
 
     DrawOptionsWindow();
@@ -1104,6 +1118,28 @@ void App::DrawInboxItem(const InboxItem& item)
         ImGui::Text("Compétence : %s", args.value("nom", std::string("?")).c_str());
         ImGui::TextUnformatted(args.value("besoin", std::string()).c_str());
     }
+    else if (item.kind == "github")
+    {
+        const std::string action = args.value("action", "");
+        const int number = args.value("numero", 0);
+        if (action == "creer_issue")
+        {
+            ImGui::Text("Créer l'issue : %s", args.value("titre", std::string()).c_str());
+            ImGui::TextUnformatted(args.value("corps", std::string()).c_str());
+        }
+        else if (action == "commenter")
+        {
+            ImGui::Text("Commenter l'issue #%d :", number);
+            ImGui::TextUnformatted(args.value("texte", std::string()).c_str());
+        }
+        else
+        {
+            ImGui::Text("Fermer l'issue #%d. Preuve donnée :", number);
+            ImGui::TextUnformatted(args.value("preuve", std::string()).c_str());
+            if (pending)
+                ImGui::Checkbox("J'ai vérifié moi-même que les tests passent", &m_ghInboxTests[item.id]);
+        }
+    }
     else if (item.kind == "code")
     {
         ImGui::TextColored(kColDim, "Pour %s, dans %s :", CodeTwinOf(item.ai) ? CodeTwinOf(item.ai) : "?",
@@ -1162,6 +1198,8 @@ void App::DrawInboxItem(const InboxItem& item)
                 }
                 else if (item.kind == "skill")
                     RequestSkill(item);
+                else if (item.kind == "github")
+                    AcceptGitHubRequest(item);
             }
             ImGui::PopStyleColor();
         }
@@ -1590,6 +1628,22 @@ void App::DrawTaskBoard(Channel& channel)
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextColored(kColDim, "TÂCHES DU SALON");
+    const bool bugs = channel.type == ChannelType::Bugs;
+    Subserver* owner = m_store.FindSubserver(m_selectedSubserver);
+    if (bugs && owner)
+    {
+        ImGui::BeginDisabled(m_ghBusy);
+        if (ImGui::SmallButton(m_ghBusy ? "GitHub…" : "Synchroniser les issues"))
+            SyncIssues(*owner, channel);
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Importe les issues du dépôt en tâches (lecture seule sur GitHub)");
+        if (!m_ghStatus.empty())
+        {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(kColDim, "%s", m_ghStatus.c_str());
+            ImGui::PopTextWrapPos();
+        }
+    }
     const std::vector<TaskItem> tasks = m_store.Tasks(channel.id);
     if (tasks.empty())
         ImGui::TextColored(kColDim, "Aucune tâche.");
@@ -1602,11 +1656,40 @@ void App::DrawTaskBoard(Channel& channel)
         ImGui::TextUnformatted(t.title.c_str());
         ImGui::PopTextWrapPos();
         ImGui::TextColored(kColDim, "   %s · %s", t.assignee.empty() ? "personne" : AiDisplayName(t.assignee), TaskStatusLabel(t.status));
+        if (t.issueNumber > 0)
+        {
+            ImGui::SameLine();
+            const std::string badge = "#" + std::to_string(t.issueNumber) + (t.issueState == "CLOSED" ? " fermée" : "");
+            if (ImGui::SmallButton(badge.c_str()) && !t.issueUrl.empty())
+                ShellExecuteW(nullptr, L"open", Platform::Widen(t.issueUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            ImGui::SetItemTooltip("Ouvrir l'issue sur GitHub");
+        }
         if (ImGui::BeginPopupContextItem("##task"))
         {
             for (const char* s : {"a_faire", "en_cours", "fait", "bloque"})
                 if (ImGui::MenuItem(TaskStatusLabel(s), nullptr, t.status == s))
                     m_store.SetTaskStatus(channel.id, t.id, s);
+            if (bugs)
+            {
+                ImGui::Separator();
+                auto open = [&](const char* kind) {
+                    m_ghDialog = kind;
+                    m_ghTaskId = t.id;
+                    m_ghTitle = t.issueNumber > 0 ? t.title : t.title;
+                    m_ghBody.clear();
+                    m_ghTestsConfirmed = false;
+                    m_openGhDialog = true;
+                };
+                if (t.issueNumber == 0 && ImGui::MenuItem("Créer l'issue GitHub…"))
+                    open("create");
+                if (t.issueNumber > 0 && t.issueState != "CLOSED")
+                {
+                    if (ImGui::MenuItem("Commenter l'issue…"))
+                        open("comment");
+                    if (ImGui::MenuItem("Fermer l'issue (tests passés)…"))
+                        open("close");
+                }
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Supprimer"))
                 m_store.DeleteTask(t.id);
@@ -2216,6 +2299,35 @@ void App::HandleAction(const ConductorEvent& ev)
         m_store.AddInboxItem(item);
         PostSystem(sub->id, ch->id, who + " veut confier un travail à " + CodeTwinOf(ev.ai) + " (boîte aux lettres).");
     }
+    else if (name == "github")
+    {
+        const auto role = ch->roles.find(ev.ai);
+        if (ch->type != ChannelType::Bugs || role == ch->roles.end() || !role->second.manageGithub)
+        {
+            PostSystem(sub->id, ch->id, who + " n'a pas la permission de gérer GitHub dans ce salon (salon Bugs + rôle « Gérer les issues GitHub »).");
+            return;
+        }
+        const std::string action = args.value("action", "");
+        if (action != "creer_issue" && action != "commenter" && action != "proposer_fermeture")
+        {
+            PostSystem(sub->id, ch->id, who + " : action GitHub inconnue « " + action + " ».");
+            return;
+        }
+        if (action == "creer_issue" && Trim(args.value("titre", std::string())).empty())
+            return;
+        if (action != "creer_issue" && args.value("numero", 0) <= 0)
+            return;
+        InboxItem item;
+        item.kind = "github";
+        item.subserverId = sub->id;
+        item.channelId = ch->id;
+        item.ai = ev.ai;
+        item.payload = args.dump();
+        m_store.AddInboxItem(item);
+        const std::string what = action == "creer_issue" ? "créer une issue" : action == "commenter" ? "commenter l'issue #" + std::to_string(args.value("numero", 0))
+                                                                                 : "fermer l'issue #" + std::to_string(args.value("numero", 0));
+        PostSystem(sub->id, ch->id, who + " propose de " + what + " (boîte aux lettres : rien n'est publié sans toi).");
+    }
     else if (name == "tache")
     {
         const auto role = ch->roles.find(ev.ai);
@@ -2241,6 +2353,212 @@ void App::HandleAction(const ConductorEvent& ev)
     {
         PostSystem(sub->id, ch->id, who + " a demandé un outil inconnu : " + name);
     }
+}
+
+// ===========================================================================
+// GitHub (Bugs salons)
+// ===========================================================================
+
+void App::RunGitHub(const std::string& label, std::function<std::function<void()>()> work)
+{
+    if (m_ghBusy)
+    {
+        m_ghStatus = "GitHub est déjà occupé, réessaie dans un instant.";
+        return;
+    }
+    if (m_ghThread.joinable())
+        m_ghThread.join();
+    m_ghBusy = true;
+    m_ghStatus = label;
+    m_ghThread = std::thread([this, work = std::move(work)] {
+        std::function<void()> apply = work();
+        {
+            std::lock_guard<std::mutex> lock(m_ghMutex);
+            m_ghDone.push_back(std::move(apply));
+        }
+        m_ghBusy = false;
+    });
+}
+
+void App::SyncIssues(const Subserver& subserver, const Channel& channel)
+{
+    const std::string slug = GitHub::RepoSlug(GithubUrlFor(subserver));
+    if (slug.empty())
+    {
+        m_ghStatus = "Aucun dépôt GitHub pour ce sous-serveur (bouton « Sources »).";
+        return;
+    }
+    const std::string channelId = channel.id;
+    RunGitHub("Lecture des issues de " + slug + "…", [this, slug, channelId]() -> std::function<void()> {
+        std::vector<GitHub::Issue> issues;
+        const GitHub::Result r = GitHub::ListIssues(slug, issues);
+        return [this, r, issues, slug, channelId] {
+            if (!r.ok)
+            {
+                m_ghStatus = "GitHub : " + r.error;
+                return;
+            }
+            const Store::IssueImport import = m_store.ImportIssues(channelId, issues);
+            m_ghStatus = slug + " : " + std::to_string(issues.size()) + " issues lues, " + std::to_string(import.created) +
+                         " nouvelle(s) tâche(s), " + std::to_string(import.updated) + " mise(s) à jour, " +
+                         std::to_string(import.closed) + " fermée(s) sur GitHub.";
+        };
+    });
+}
+
+void App::AcceptGitHubRequest(const InboxItem& item)
+{
+    json args = json::parse(item.payload, nullptr, false);
+    Subserver* sub = m_store.FindSubserver(item.subserverId);
+    if (!sub || args.is_discarded())
+        return;
+    const std::string slug = GitHub::RepoSlug(GithubUrlFor(*sub));
+    if (slug.empty())
+    {
+        m_store.DecideInboxItem(item.id, "refuse", "Aucun dépôt GitHub configuré.");
+        return;
+    }
+    const std::string action = args.value("action", "");
+    const int number = args.value("numero", 0);
+    if (action == "proposer_fermeture" && !m_ghInboxTests[item.id])
+    {
+        m_ghStatus = "Pour fermer une issue, coche d'abord que tu as vérifié les tests toi-même.";
+        m_store.SetError(m_ghStatus);
+        return;
+    }
+    const std::string itemId = item.id, subId = item.subserverId, chanId = item.channelId;
+    m_store.DecideInboxItem(item.id, "accepte", "envoi à GitHub…");
+    RunGitHub("Envoi à GitHub…", [this, slug, action, number, args, itemId, subId, chanId]() -> std::function<void()> {
+        GitHub::Result r;
+        GitHub::Issue created;
+        if (action == "creer_issue")
+            r = GitHub::CreateIssue(slug, args.value("titre", std::string()), args.value("corps", std::string()), created);
+        else if (action == "commenter")
+            r = GitHub::Comment(slug, number, args.value("texte", std::string()));
+        else
+            r = GitHub::Close(slug, number, "Fermée après vérification des tests.\n\n" + args.value("preuve", std::string()));
+        return [this, r, created, action, number, itemId, subId, chanId] {
+            std::string outcome;
+            if (!r.ok)
+                outcome = "GitHub a refusé : " + r.error;
+            else if (action == "creer_issue")
+            {
+                outcome = "Issue #" + std::to_string(created.number) + " créée : " + created.url;
+                if (const TaskItem* t = m_store.AddTask(chanId, "#" + std::to_string(created.number) + " " + created.title, "", "github"))
+                    m_store.SetTaskIssue(t->id, created.number, created.url, "OPEN");
+            }
+            else if (action == "commenter")
+                outcome = "Commentaire publié sur l'issue #" + std::to_string(number) + ".";
+            else
+            {
+                outcome = "Issue #" + std::to_string(number) + " fermée.";
+                for (const TaskItem& t : m_store.Tasks(chanId))
+                    if (t.issueNumber == number)
+                        m_store.SetTaskIssue(t.id, number, t.issueUrl, "CLOSED");
+            }
+            m_store.DecideInboxItem(itemId, r.ok ? "accepte" : "refuse", outcome);
+            m_ghStatus = outcome;
+            PostSystem(subId, chanId, outcome);
+        };
+    });
+}
+
+void App::DrawGitHubDialog()
+{
+    if (m_openGhDialog)
+    {
+        ImGui::OpenPopup("GitHub");
+        m_openGhDialog = false;
+    }
+    const float scale = ImGui::GetStyle().FontScaleDpi;
+    ImGui::SetNextWindowSize(ImVec2(560.0f * scale, 0.0f));
+    if (!ImGui::BeginPopupModal("GitHub", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    Subserver* sub = m_store.FindSubserver(m_selectedSubserver);
+    const TaskItem* task = m_store.FindTask(m_ghTaskId);
+    const std::string slug = sub ? GitHub::RepoSlug(GithubUrlFor(*sub)) : std::string();
+    if (!task || slug.empty())
+    {
+        ImGui::TextColored(kColError, "%s", slug.empty() ? "Aucun dépôt GitHub pour ce sous-serveur." : "Tâche introuvable.");
+        if (ImGui::Button("Fermer"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    ImGui::TextColored(kColDim, "Dépôt : %s", slug.c_str());
+    bool send = false;
+    if (m_ghDialog == "create")
+    {
+        ImGui::TextUnformatted("Titre");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputText("##ghTitle", &m_ghTitle);
+        ImGui::TextUnformatted("Description");
+        ImGui::InputTextMultiline("##ghBody", &m_ghBody, ImVec2(-1, 140.0f * scale));
+        ImGui::BeginDisabled(Trim(m_ghTitle).empty() || m_ghBusy);
+        send = ImGui::Button("Publier l'issue");
+        ImGui::EndDisabled();
+    }
+    else if (m_ghDialog == "comment")
+    {
+        ImGui::Text("Commentaire sur l'issue #%d", task->issueNumber);
+        ImGui::InputTextMultiline("##ghBody", &m_ghBody, ImVec2(-1, 140.0f * scale));
+        ImGui::BeginDisabled(Trim(m_ghBody).empty() || m_ghBusy);
+        send = ImGui::Button("Publier le commentaire");
+        ImGui::EndDisabled();
+    }
+    else
+    {
+        ImGui::Text("Fermer l'issue #%d", task->issueNumber);
+        ImGui::TextWrapped("Une issue ne se ferme qu'une fois la correction vérifiée par des tests qui passent.");
+        ImGui::Checkbox("J'ai vérifié que les tests passent", &m_ghTestsConfirmed);
+        ImGui::TextUnformatted("Commentaire de clôture (facultatif)");
+        ImGui::InputTextMultiline("##ghBody", &m_ghBody, ImVec2(-1, 100.0f * scale));
+        ImGui::BeginDisabled(!m_ghTestsConfirmed || m_ghBusy);
+        send = ImGui::Button("Fermer l'issue");
+        ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Annuler"))
+        ImGui::CloseCurrentPopup();
+
+    if (send)
+    {
+        const std::string kind = m_ghDialog, taskId = task->id, channelId = task->channelId, title = Trim(m_ghTitle),
+                          body = m_ghBody, subId = sub->id;
+        const int number = task->issueNumber;
+        RunGitHub("Envoi à GitHub…", [this, kind, slug, taskId, channelId, title, body, number, subId]() -> std::function<void()> {
+            GitHub::Result r;
+            GitHub::Issue created;
+            if (kind == "create")
+                r = GitHub::CreateIssue(slug, title, body, created);
+            else if (kind == "comment")
+                r = GitHub::Comment(slug, number, body);
+            else
+                r = GitHub::Close(slug, number, body);
+            return [this, r, created, kind, taskId, channelId, number, subId] {
+                std::string outcome;
+                if (!r.ok)
+                    outcome = "GitHub a refusé : " + r.error;
+                else if (kind == "create")
+                {
+                    m_store.SetTaskIssue(taskId, created.number, created.url, "OPEN");
+                    outcome = "Issue #" + std::to_string(created.number) + " créée : " + created.url;
+                }
+                else if (kind == "comment")
+                    outcome = "Commentaire publié sur l'issue #" + std::to_string(number) + ".";
+                else
+                {
+                    const TaskItem* t = m_store.FindTask(taskId);
+                    m_store.SetTaskIssue(taskId, number, t ? t->issueUrl : std::string(), "CLOSED");
+                    outcome = "Issue #" + std::to_string(number) + " fermée.";
+                }
+                m_ghStatus = outcome;
+                PostSystem(subId, channelId, outcome);
+            };
+        });
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 // ===========================================================================

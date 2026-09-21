@@ -208,4 +208,8 @@ struct TaskItem
     std::string status;   // "a_faire", "en_cours", "fait", "bloque"
     std::string createdBy;
     std::string updatedAt;
+    // Linked GitHub issue (Bugs salons); 0 = none.
+    int issueNumber = 0;
+    std::string issueUrl;
+    std::string issueState; // "OPEN" / "CLOSED" as last seen on GitHub
 };
