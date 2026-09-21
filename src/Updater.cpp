@@ -4,9 +4,12 @@
 #include "Process.h"
 #include "ReleaseSignature.h"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
-#include <bcrypt.h>
+#else
+#include <unistd.h>
+#endif
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -19,6 +22,38 @@ using nlohmann::json;
 
 namespace
 {
+#ifdef _WIN32
+    constexpr const char* kExeName = "AgentChats.exe";
+    constexpr const char* kTestsName = "AgentChatsTests.exe";
+    constexpr const char* kPreviousName = "AgentChats.previous.exe";
+    constexpr const char* kPendingName = "AgentChats.new.exe";
+    const fs::path kConfigDir = "Release"; // multi-config generators
+#else
+    constexpr const char* kExeName = "AgentChats";
+    constexpr const char* kTestsName = "AgentChatsTests";
+    constexpr const char* kPreviousName = "AgentChats.previous";
+    constexpr const char* kPendingName = "AgentChats.new";
+    const fs::path kConfigDir = "";        // single-config (Makefiles, Ninja)
+#endif
+    // Release asset of this platform: the executable itself, and ".sig"/".sha256" next to it.
+#ifdef _WIN32
+    constexpr const char* kAssetName = "AgentChats.exe";
+#else
+    constexpr const char* kAssetName = "AgentChats-linux-x86_64";
+#endif
+
+    fs::path CurrentExecutable()
+    {
+#ifdef _WIN32
+        wchar_t current[32768];
+        const DWORD n = GetModuleFileNameW(nullptr, current, static_cast<DWORD>(std::size(current)));
+        return (n && n < std::size(current)) ? fs::path(std::wstring(current, n)) : fs::path();
+#else
+        std::error_code ec;
+        return fs::read_symlink("/proc/self/exe", ec);
+#endif
+    }
+
     std::string Trim(std::string s)
     {
         const size_t first = s.find_first_not_of(" \t\r\n");
@@ -55,7 +90,7 @@ namespace
 }
 
 Updater::Updater(fs::path dataRoot)
-    : m_root(dataRoot / "updates"), m_pending(m_root / "AgentChats.new.exe"),
+    : m_root(dataRoot / "updates"), m_pending(m_root / kPendingName),
       m_source(dataRoot / "projects" / "Agents-Chat") {}
 Updater::~Updater() { if (m_thread.joinable()) m_thread.join(); }
 
@@ -131,7 +166,8 @@ bool Updater::BuildLocal(const fs::path& sourceOverride)
         { std::lock_guard<std::mutex> lock(m_mutex); m_status = "Compilation de la version locale…"; }
         std::atomic<bool> cancel{false};
         const fs::path build = source / "build-local";
-        Process::Result r = Process::Run({cmake, L"-S", source.wstring(), L"-B", build.wstring()}, source.wstring(), "", collect, cancel, {}, 600);
+        Process::Result r = Process::Run({cmake, L"-S", source.wstring(), L"-B", build.wstring(), L"-DCMAKE_BUILD_TYPE=Release"},
+                                         source.wstring(), "", collect, cancel, {}, 600);
         if (r.exitCode == 0 && r.started && !r.timedOut)
             r = Process::Run({cmake, L"--build", build.wstring(), L"--config", L"Release", L"--target", L"AgentChats", L"AgentChatsTests"},
                              source.wstring(), "", collect, cancel, {}, 1800);
@@ -145,7 +181,7 @@ bool Updater::BuildLocal(const fs::path& sourceOverride)
         // The tests of the modified code decide; a failing build is never staged.
         { std::lock_guard<std::mutex> lock(m_mutex); m_status = "Tests de la version locale…"; }
         output += "\n--- AgentChatsTests ---\n";
-        const fs::path tests = build / "Release" / "AgentChatsTests.exe";
+        const fs::path tests = build / kConfigDir / kTestsName;
         r = Process::Run({tests.wstring()}, build.wstring(), "", collect, cancel, {}, 600);
         report.testsPassed = r.started && !r.timedOut && r.exitCode == 0;
         if (!report.testsPassed)
@@ -154,7 +190,7 @@ bool Updater::BuildLocal(const fs::path& sourceOverride)
                    " : elle ne sera pas installée.");
             return;
         }
-        const fs::path built = build / "Release" / "AgentChats.exe";
+        const fs::path built = build / kConfigDir / kExeName;
         std::error_code ec; fs::create_directories(m_root, ec);
         if (!fs::copy_file(built, m_pending, fs::copy_options::overwrite_existing, ec))
         {
@@ -229,9 +265,9 @@ void Updater::RunCheck(bool download)
             for (const json& asset : doc.value("assets", json::array()))
             {
                 const std::string name = asset.value("name", "");
-                if (name == "AgentChats.exe") exeUrl = asset.value("browser_download_url", "");
-                if (name == "AgentChats.exe.sha256") hashUrl = asset.value("browser_download_url", "");
-                if (name == "AgentChats.exe.sig") sigUrl = asset.value("browser_download_url", "");
+                if (name == kAssetName) exeUrl = asset.value("browser_download_url", "");
+                if (name == std::string(kAssetName) + ".sha256") hashUrl = asset.value("browser_download_url", "");
+                if (name == std::string(kAssetName) + ".sig") sigUrl = asset.value("browser_download_url", "");
             }
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
@@ -277,24 +313,40 @@ bool Updater::Ready() const { std::lock_guard<std::mutex> lock(m_mutex); return 
 bool Updater::Apply(void* hwnd)
 {
     if (!Ready() || !fs::exists(m_pending)) return false;
-    wchar_t current[32768];
-    const DWORD n = GetModuleFileNameW(nullptr, current, static_cast<DWORD>(std::size(current)));
-    if (!n || n >= std::size(current)) return false;
+    const fs::path current = CurrentExecutable();
+    if (current.empty()) return false;
+#ifdef _WIN32
     std::wstring command = Process::QuoteArg(m_pending.wstring()) + L" --apply-update " +
-                           Process::QuoteArg(std::wstring(current, n)) + L" " + std::to_wstring(GetCurrentProcessId());
+                           Process::QuoteArg(current.wstring()) + L" " + std::to_wstring(GetCurrentProcessId());
     STARTUPINFOW si{sizeof(si)}; PROCESS_INFORMATION pi{};
     if (!CreateProcessW(m_pending.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) return false;
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     PostMessageW(static_cast<HWND>(hwnd), WM_CLOSE, 0, 0);
     return true;
+#else
+    // Linux: a running executable can be replaced in place; the new version starts next launch.
+    (void)hwnd;
+    std::error_code ec;
+    const fs::path previous = PreviousPath();
+    const fs::path staged = current.string() + ".new";
+    if (!fs::copy_file(current, previous, fs::copy_options::overwrite_existing, ec) ||
+        !fs::copy_file(m_pending, staged, fs::copy_options::overwrite_existing, ec))
+        return false;
+    fs::permissions(staged, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec |
+                                fs::perms::others_read | fs::perms::others_exec, ec);
+    fs::rename(staged, current, ec); // atomic
+    if (ec) return false;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_ready = false;
+    m_status = "Nouvelle version installée : relance Agents Chat pour l'utiliser.";
+    return true;
+#endif
 }
 
 fs::path Updater::PreviousPath()
 {
-    wchar_t current[32768];
-    const DWORD n = GetModuleFileNameW(nullptr, current, static_cast<DWORD>(std::size(current)));
-    if (!n || n >= std::size(current)) return {};
-    return fs::path(std::wstring(current, n)).parent_path() / L"AgentChats.previous.exe";
+    const fs::path current = CurrentExecutable();
+    return current.empty() ? fs::path() : current.parent_path() / kPreviousName;
 }
 
 bool Updater::HasPrevious() const
@@ -318,16 +370,22 @@ bool Updater::Rollback(void* hwnd)
 
 bool Updater::ApplyPendingUpdate(const fs::path& destination, unsigned long parentPid)
 {
+#ifdef _WIN32
     if (HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, parentPid)) { WaitForSingleObject(process, 30000); CloseHandle(process); }
     wchar_t self[32768];
     const DWORD n = GetModuleFileNameW(nullptr, self, static_cast<DWORD>(std::size(self)));
     if (!n) return false;
     // Keep the version being replaced, for "Revenir à la version précédente".
-    const fs::path previous = destination.parent_path() / L"AgentChats.previous.exe";
+    const fs::path previous = destination.parent_path() / kPreviousName;
     if (_wcsicmp(fs::path(self).filename().c_str(), previous.filename().c_str()) != 0)
         CopyFileW(destination.c_str(), previous.c_str(), FALSE);
     if (!CopyFileW(self, destination.c_str(), FALSE)) return false;
     ShellExecuteW(nullptr, L"open", destination.c_str(), nullptr, destination.parent_path().c_str(), SW_SHOWNORMAL);
     MoveFileExW(self, nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
     return true;
+#else
+    (void)destination;
+    (void)parentPid;
+    return false; // Linux swaps in place from Apply(); no helper process
+#endif
 }
