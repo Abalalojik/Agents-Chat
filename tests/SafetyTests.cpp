@@ -192,6 +192,9 @@ int main(int argc, char** argv)
     const size_t withSelfWorkspace = store.Subservers().size();
     CHECK(store.EnsureSelfImprovementSubserver(Platform::Narrow(base.wstring())));
     CHECK(store.Subservers().size() == withSelfWorkspace);
+    Subserver* self = store.FindSubserver("agentchats-self");
+    Channel* feedback = self ? store.FindChannel(*self, "agentchats-feedback") : nullptr;
+    CHECK(feedback != nullptr && feedback->type == ChannelType::Bugs);
 
     // Tasks are shared across channels and can be reassigned from the global todo.
     const TaskItem* task = channel ? store.AddTask(channel->id, "Vérifier le bug", "user", "user") : nullptr;

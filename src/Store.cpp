@@ -374,8 +374,32 @@ Subserver* Store::CreateSubserver(const std::string& name, const std::string& va
 bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
 {
     constexpr const char* kId = "agentchats-self";
-    if (FindSubserver(kId))
+    if (Subserver* existing = FindSubserver(kId))
+    {
+        const Subserver previous = *existing;
+        bool changed = false;
+        if (!codePath.empty() && existing->codePath != codePath)
+        {
+            existing->codePath = codePath;
+            changed = true;
+        }
+        for (Channel& channel : existing->channels)
+            if (channel.id == "agentchats-feedback" && channel.type != ChannelType::Bugs)
+            {
+                channel.type = ChannelType::Bugs;
+                channel.level = ModelLevel::Normal;
+                channel.roles["chatgpt"] = {"Développeur", kRolePresets[1].instructions, true};
+                channel.roles["claude"] = {"Architecte", kRolePresets[4].instructions, false};
+                channel.roles["gemini"] = {"Chercheur", kRolePresets[5].instructions, false};
+                changed = true;
+            }
+        if (changed && !SaveWorkspace())
+        {
+            *existing = previous;
+            return false;
+        }
         return true;
+    }
     if (codePath.empty())
         return true; // Packaged without its source checkout: do not create a dead workspace.
 
@@ -387,9 +411,12 @@ bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
     Channel discussion;
     discussion.id = "agentchats-feedback";
     discussion.name = "bugs-et-idées";
-    discussion.type = ChannelType::Detente;
+    discussion.type = ChannelType::Bugs;
     discussion.language = "Français";
-    discussion.level = ModelLevel::Leger;
+    discussion.level = ModelLevel::Normal;
+    discussion.roles["chatgpt"] = {"Développeur", kRolePresets[1].instructions, true};
+    discussion.roles["claude"] = {"Architecte", kRolePresets[4].instructions, false};
+    discussion.roles["gemini"] = {"Chercheur", kRolePresets[5].instructions, false};
 
     Channel implementation;
     implementation.id = "agentchats-code";
