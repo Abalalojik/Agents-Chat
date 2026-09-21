@@ -2725,7 +2725,7 @@ void App::DrawConnectionsTab()
         a = m_avail;
     }
     ImGui::TextWrapped("Tes forfaits passent par les agents officiels, installés sur ta machine. « Se connecter » ouvre "
-                       "la procédure officielle dans une console : suis-la dans ton navigateur, puis vérifie cette IA. "
+                       "la procédure officielle dans une console : suis-la dans ton navigateur, puis utilise Fetch quota. "
                        "L'application ne voit jamais tes identifiants.");
     ImGui::Spacing();
     struct Row
@@ -2754,8 +2754,10 @@ void App::DrawConnectionsTab()
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(m_availRunning);
-        if (ImGui::Button("Vérifier"))
+        if (ImGui::Button("Fetch quota"))
             RefreshAvailability(row.ai);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Actualise uniquement l'identité, le forfait et le quota de cette IA.");
         ImGui::EndDisabled();
         ImGui::Spacing();
         ImGui::PopID();
