@@ -118,6 +118,7 @@ struct Subserver
     std::string vaultPath; // Obsidian vault (analysis / relaxation)
     std::string lorePath;  // canon reference, read-only except lore consolidation
     std::string codePath;  // project folder for code channels
+    std::string githubUrl; // optional explicit repository for Bugs/GitHub tools
     std::vector<Channel> channels;
 };
 

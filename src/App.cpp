@@ -84,8 +84,11 @@ namespace
         return s.substr(first, last - first + 1);
     }
 
-    std::string GithubUrlFor(const std::string& codePath)
+    std::string GithubUrlFor(const Subserver& subserver)
     {
+        if (subserver.githubUrl.rfind("https://github.com/", 0) == 0)
+            return subserver.githubUrl;
+        const std::string& codePath = subserver.codePath;
         const std::wstring git = Process::FindOnPath(L"git.exe");
         if (git.empty() || codePath.empty())
             return {};
@@ -613,6 +616,7 @@ void App::DrawChannelColumn(float height)
         {
             m_renameText = sub->name;
             m_editMain = sub->mainPath;
+            m_editGithub = sub->githubUrl;
             m_editAdditionalFolders = sub->additionalFolders;
             m_editExclusions = sub->exclusions;
             m_editVault = sub->vaultPath;
@@ -2127,6 +2131,9 @@ void App::DrawEditSourcesPopup()
     ImGui::SeparatorText("Dossier principal");
     bool valid = FolderField("Dossier principal", m_editMain, L"Choisir le dossier principal");
     ImGui::TextColored(kColDim, "Lecture pour le chat ; dossier de travail des salons Code et Bugs.");
+    ImGui::SeparatorText("Repository GitHub");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##githubRepository", "https://github.com/propriétaire/dépôt", &m_editGithub);
 
     ImGui::SeparatorText("Autres dossiers");
     for (size_t i = 0; i < m_editAdditionalFolders.size();)
@@ -2182,7 +2189,7 @@ void App::DrawEditSourcesPopup()
     {
         m_store.RenameSubserver(*sub, Trim(m_renameText));
         m_store.UpdateFolderAccess(*sub, Trim(m_editMain),
-                                   m_editAdditionalFolders, m_editExclusions);
+                                   m_editAdditionalFolders, m_editExclusions, Trim(m_editGithub));
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
@@ -2498,7 +2505,7 @@ void App::DrawChatOptionsWindow()
             ImGui::SeparatorText("GitHub");
             if (ImGui::Button("Voir les issues"))
             {
-                const std::string repo = GithubUrlFor(sub->codePath);
+                const std::string repo = GithubUrlFor(*sub);
                 if (repo.empty())
                     m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
                 else
@@ -2507,7 +2514,7 @@ void App::DrawChatOptionsWindow()
             ImGui::SameLine();
             if (ImGui::Button("Nouveau bug"))
             {
-                const std::string repo = GithubUrlFor(sub->codePath);
+                const std::string repo = GithubUrlFor(*sub);
                 if (repo.empty())
                     m_store.SetError("Impossible de trouver un dépôt GitHub dans le dossier de code de ce sous-serveur.");
                 else
@@ -2744,6 +2751,7 @@ void App::DrawGeneralTab()
     {
         m_userNameInput = m_settings.UserName();
         m_allowedInput = m_settings.AllowedCommands();
+        m_commitEmailInput = m_settings.CommitEmail();
         m_generalLoaded = true;
     }
     ImGui::TextUnformatted("Ton prénom (pour que les IA s'adressent à toi)");
@@ -2751,6 +2759,28 @@ void App::DrawGeneralTab()
     if (ImGui::InputText("##userName", &m_userNameInput, ImGuiInputTextFlags_EnterReturnsTrue) ||
         ImGui::IsItemDeactivatedAfterEdit())
         m_settings.SetUserName(Trim(m_userNameInput));
+    ImGui::Spacing();
+
+    ImGui::TextUnformatted("Adresse de commit");
+    ImGui::TextColored(kColDim, "Appliquée comme user.email aux repositories Git des sous-serveurs.");
+    ImGui::SetNextItemWidth(480.0f * ImGui::GetStyle().FontScaleDpi);
+    ImGui::InputText("##commitEmail", &m_commitEmailInput);
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        const std::string email = Trim(m_commitEmailInput);
+        if (!email.empty() && m_settings.SetCommitEmail(email))
+        {
+            const std::wstring git = Process::FindOnPath(L"git.exe");
+            if (!git.empty())
+                for (const Subserver& sub : m_store.Subservers())
+                    if (!sub.codePath.empty() && fs::exists(fs::path(Platform::Widen(sub.codePath)) / L".git"))
+                    {
+                        std::atomic<bool> cancel{false};
+                        Process::Run({git, L"config", L"user.email", Platform::Widen(email)},
+                                     Platform::Widen(sub.codePath), "", {}, cancel, {}, 10);
+                    }
+        }
+    }
     ImGui::Spacing();
 
     int turns = m_settings.MaxTurns();

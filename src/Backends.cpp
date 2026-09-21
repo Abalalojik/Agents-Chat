@@ -221,14 +221,6 @@ namespace
         return models;
     }
 
-    std::string AntigravityCodeModel(const std::string& configured)
-    {
-        const std::string model = AntigravityModel(configured);
-        // Research/code work delegated to Antigravity must stay on Gemini.
-        // Claude and GPT-OSS are chat fallbacks only.
-        return model.rfind("gemini-", 0) == 0 ? model : "gemini-3.1-pro-low";
-    }
-
     // ---- Claude Code --------------------------------------------------------------------
 
     TurnResult RunClaude(const TurnRequest& req, const std::function<void(const std::string&)>& onChunk,
@@ -907,7 +899,7 @@ TurnResult RunCodeWork(const std::string& aiId, const std::string& model, const 
             std::vector<std::wstring> args = {a.exe, L"-p", Platform::Widen(prompt),
                                                L"--output-format", L"json", L"--disable-slash-commands",
                                                L"--mode", L"accept-edits", L"--sandbox", L"--model",
-                                               Platform::Widen(AntigravityCodeModel(model)),
+                                               Platform::Widen(AntigravityModel(model)),
                                                L"--print-timeout", L"3600s"};
             std::string output;
             p = Process::Run(args, projectDir, "", [&](const std::string& line) {

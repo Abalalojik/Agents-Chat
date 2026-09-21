@@ -31,7 +31,8 @@ public:
                        const std::string& codePath);
     bool UpdateFolderAccess(Subserver& subserver, const std::string& mainPath,
                             const std::vector<Subserver::FolderAccess>& additionalFolders,
-                            const std::vector<Subserver::ExclusionRule>& exclusions);
+                            const std::vector<Subserver::ExclusionRule>& exclusions,
+                            const std::string& githubUrl = {});
     Channel* CreateChannel(Subserver& subserver, const std::string& name, ChannelType type,
                            const std::string& language);
     bool RenameSubserver(Subserver& subserver, const std::string& name);

@@ -132,6 +132,7 @@ private:
     bool m_openEditSources = false;
     std::string m_editVault, m_editLore, m_editCode;
     std::string m_editMain;
+    std::string m_editGithub;
     std::vector<Subserver::FolderAccess> m_editAdditionalFolders;
     std::vector<Subserver::ExclusionRule> m_editExclusions;
     bool m_openCreateChannel = false;
@@ -142,7 +143,7 @@ private:
     // Options state
     std::map<std::string, std::string> m_keyInput;
     std::map<std::string, std::string> m_answerInput; // inbox question id -> answer being typed
-    std::string m_userNameInput, m_allowedInput;
+    std::string m_userNameInput, m_allowedInput, m_commitEmailInput;
     std::string m_microsoftClientIdInput;
     std::string m_googleClientIdInput, m_googleClientSecretInput;
     std::string m_synciSetupTokenInput;

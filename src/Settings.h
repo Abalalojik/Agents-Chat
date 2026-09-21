@@ -41,6 +41,8 @@ public:
     // Exact commands code agents may run without asking (Claude/Gemini), one per line.
     const std::string& AllowedCommands() const { return m_allowedCommands; }
     bool SetAllowedCommands(const std::string& commands);
+    const std::string& CommitEmail() const { return m_commitEmail; }
+    bool SetCommitEmail(const std::string& email);
 
     // API keys, stored encrypted (DPAPI). ApiKey returns "" when none.
     std::string ApiKey(const std::string& provider) const;
@@ -63,5 +65,7 @@ private:
     std::string m_userName;
     int m_maxTurns = 8;
     std::string m_allowedCommands;
+    // Empty for a fresh installation: personal Git identities are local user data.
+    std::string m_commitEmail;
     std::string m_lastError;
 };

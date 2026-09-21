@@ -114,6 +114,7 @@ int main(int argc, char** argv)
     fs::remove_all(presenceRoot, presenceEc);
     fs::create_directories(presenceRoot, presenceEc);
     Settings presenceSettings(presenceRoot);
+    CHECK(presenceSettings.CommitEmail().empty()); // a release must never inherit the maintainer's identity
     presenceSettings.SetDetectedPresence("chatgpt", "chat", {PresenceState::Exhausted, "quota épuisé", ""});
     CHECK(!PresenceCanWork(presenceSettings.GetPresence("chatgpt", "chat").state));
     CHECK(presenceSettings.PutBackOnline("chatgpt", "chat"));

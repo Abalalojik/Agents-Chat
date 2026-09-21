@@ -202,6 +202,7 @@ bool Store::Load()
                 sub.vaultPath = s.value("vaultPath", "");
                 sub.lorePath = s.value("lorePath", "");
                 sub.codePath = s.value("codePath", "");
+                sub.githubUrl = s.value("githubUrl", "");
                 sub.mainPath = s.value("mainPath", !sub.codePath.empty() ? sub.codePath : sub.vaultPath);
                 for (const json& folder : s.value("additionalFolders", json::array()))
                     if (folder.is_object())
@@ -322,6 +323,7 @@ bool Store::SaveWorkspace()
                         {"vaultPath", sub.vaultPath},
                         {"lorePath", sub.lorePath},
                         {"codePath", sub.codePath},
+                        {"githubUrl", sub.githubUrl},
                         {"channels", channels}});
     }
     return WriteFileAtomic(m_root / "workspace.json", json({{"version", 1}, {"subservers", subs}}).dump(2));
@@ -481,12 +483,14 @@ bool Store::UpdateSources(Subserver& subserver, const std::string& vaultPath, co
 
 bool Store::UpdateFolderAccess(Subserver& subserver, const std::string& mainPath,
                                const std::vector<Subserver::FolderAccess>& additionalFolders,
-                               const std::vector<Subserver::ExclusionRule>& exclusions)
+                               const std::vector<Subserver::ExclusionRule>& exclusions,
+                               const std::string& githubUrl)
 {
     const Subserver previous = subserver;
     subserver.mainPath = mainPath;
     subserver.additionalFolders = additionalFolders;
     subserver.exclusions = exclusions;
+    subserver.githubUrl = githubUrl;
     // Compatibility while the specialized salon tools are being migrated.
     subserver.vaultPath = mainPath;
     subserver.codePath = mainPath;
