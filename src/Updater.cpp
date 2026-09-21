@@ -216,6 +216,12 @@ void Updater::RunCheck(bool download)
             {{"Accept", "application/vnd.github+json"}, {"X-GitHub-Api-Version", "2022-11-28"}}, "", {}, cancel);
         try
         {
+            if (release.status == 404)
+            {
+                setStatus("Aucune release publiée sur GitHub pour l'instant.");
+                m_busy = false;
+                return;
+            }
             if (release.status != 200) throw std::runtime_error(release.error.empty() ? "GitHub répond " + std::to_string(release.status) : release.error);
             const json doc = json::parse(release.body);
             const std::string version = doc.value("tag_name", "");
