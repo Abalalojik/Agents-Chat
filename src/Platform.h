@@ -32,6 +32,12 @@ namespace Platform
     // "HH:MM" if the timestamp falls today (local time), else "DD/MM HH:MM".
     std::string LocalWhen(const std::string& isoUtc);
 
+    // Opens a URL or a file with the desktop's default application (browser for http links).
+    void OpenUrl(const std::string& url);
+
+    // Sends a file or folder to the desktop trash (recoverable). True when it is gone.
+    bool MoveToTrash(const std::filesystem::path& path);
+
     // Native folder picker. Returns "" when cancelled.
     std::string PickFolder(void* ownerHwnd, const wchar_t* title);
 }

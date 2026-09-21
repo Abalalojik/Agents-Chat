@@ -2,6 +2,7 @@
 #include "Platform.h"
 #include "Secrets.h"
 
+#include <cwctype>
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
@@ -54,12 +55,14 @@ namespace Tools
 
         bool IsTextNote(const fs::path& p)
         {
-            const std::wstring ext = p.extension().wstring();
+            std::wstring ext = p.extension().wstring();
+            for (wchar_t& c : ext)
+                c = static_cast<wchar_t>(std::towlower(c));
             for (const wchar_t* allowed : {L".md", L".txt", L".json", L".jsonl", L".yaml", L".yml", L".toml",
                                            L".ini", L".cfg", L".xml", L".csv", L".cpp", L".c", L".h", L".hpp",
                                            L".cs", L".py", L".js", L".ts", L".tsx", L".jsx", L".java", L".rs",
                                            L".go", L".sh", L".ps1", L".bat", L".cmake", L".sql", L".html", L".css"})
-                if (_wcsicmp(ext.c_str(), allowed) == 0)
+                if (ext == allowed)
                     return true;
             return p.filename() == L"CMakeLists.txt" || p.filename() == L"Dockerfile";
         }

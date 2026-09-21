@@ -2,14 +2,17 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #else
+#include <sys/wait.h>
 #include <unistd.h>
 #include <cstdlib>
 #endif
 
 #include <cstdio>
+#include <vector>
 #include <ctime>
 #include <fstream>
 #include <random>
@@ -165,6 +168,25 @@ namespace Platform
         char buf[16];
         std::strftime(buf, sizeof(buf), sameDay ? "%H:%M" : "%d/%m %H:%M", &local);
         return buf;
+    }
+
+    void OpenUrl(const std::string& url)
+    {
+        ShellExecuteW(nullptr, L"open", Widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
+    bool MoveToTrash(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec))
+            return true;
+        std::wstring from = path.wstring();
+        from.push_back(L'\0'); // double-null terminated list
+        SHFILEOPSTRUCTW op{};
+        op.wFunc = FO_DELETE;
+        op.pFrom = from.c_str();
+        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+        return SHFileOperationW(&op) == 0;
     }
 
     std::string PickFolder(void* ownerHwnd, const wchar_t* title)
@@ -372,6 +394,47 @@ namespace Platform
         char buf[16];
         std::strftime(buf, sizeof(buf), sameDay ? "%H:%M" : "%d/%m %H:%M", &local);
         return buf;
+    }
+
+    namespace
+    {
+        // Runs a helper program without a shell; returns its exit code (-1 if it could not start).
+        int RunHelper(std::vector<std::string> args, bool wait)
+        {
+            std::vector<char*> argv;
+            for (std::string& a : args)
+                argv.push_back(a.data());
+            argv.push_back(nullptr);
+            const pid_t pid = fork();
+            if (pid < 0)
+                return -1;
+            if (pid == 0)
+            {
+                if (!wait)
+                    setsid(); // a detached browser outlives nothing of ours
+                execvp(argv[0], argv.data());
+                _exit(127);
+            }
+            if (!wait)
+                return 0;
+            int status = 0;
+            waitpid(pid, &status, 0);
+            return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        }
+    }
+
+    void OpenUrl(const std::string& url)
+    {
+        RunHelper({"xdg-open", url}, false);
+    }
+
+    bool MoveToTrash(const std::filesystem::path& path)
+    {
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec))
+            return true;
+        // freedesktop trash through GIO; never a permanent delete as a fallback.
+        return RunHelper({"gio", "trash", path.string()}, true) == 0 && !std::filesystem::exists(path, ec);
     }
 
     std::string PickFolder(void*, const wchar_t* title)

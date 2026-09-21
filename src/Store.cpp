@@ -2,8 +2,6 @@
 #include "Platform.h"
 
 #include <nlohmann/json.hpp>
-#include <windows.h>
-#include <shellapi.h>
 
 #include <algorithm>
 #include <fstream>
@@ -547,19 +545,10 @@ Channel* Store::CreateChannel(Subserver& subserver, const std::string& name, Cha
 
 namespace
 {
-    // Sends a folder to the Recycle Bin (recoverable), never a permanent delete.
+    // Sends a folder to the Recycle Bin / desktop trash (recoverable), never a permanent delete.
     bool Recycle(const fs::path& dir)
     {
-        std::error_code ec;
-        if (!fs::exists(dir, ec))
-            return true;
-        std::wstring from = dir.wstring();
-        from.push_back(L'\0'); // double-null terminated list
-        SHFILEOPSTRUCTW op{};
-        op.wFunc = FO_DELETE;
-        op.pFrom = from.c_str();
-        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
-        return SHFileOperationW(&op) == 0;
+        return Platform::MoveToTrash(dir);
     }
 }
 

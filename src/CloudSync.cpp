@@ -3,16 +3,45 @@
 #include "Platform.h"
 #include "Secrets.h"
 
+#ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <nlohmann/json.hpp>
 #include <windows.h>
-#include <shellapi.h>
 #include <wincrypt.h>
+#else
+#include <arpa/inet.h>
+#include <cerrno>
+#include <netinet/in.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+// The loopback OAuth listener is written against Winsock; POSIX sockets are the same calls.
+namespace
+{
+    using SOCKET = int;
+    using u_long = unsigned long;
+    constexpr int INVALID_SOCKET = -1;
+    constexpr int SOCKET_ERROR = -1;
+    constexpr int WSAEWOULDBLOCK = EWOULDBLOCK;
+    struct WSADATA {};
+    int WSAStartup(int, WSADATA*) { return 0; }
+    void WSACleanup() {}
+    int WSAGetLastError() { return errno; }
+    int closesocket(int s) { return close(s); }
+    int ioctlsocket(int s, unsigned long request, u_long* value)
+    {
+        int v = static_cast<int>(*value);
+        return ioctl(s, request, &v);
+    }
+    constexpr int MAKEWORD(int, int) { return 0; }
+}
+#endif
+#include <nlohmann/json.hpp>
 
 #include <chrono>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -86,6 +115,49 @@ namespace
         return first == std::string::npos ? std::string() : value.substr(first, last - first + 1);
     }
 
+#ifndef _WIN32
+    constexpr const char* kB64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string Base64Decode(std::string value)
+    {
+        std::replace(value.begin(), value.end(), '-', '+');
+        std::replace(value.begin(), value.end(), '_', '/');
+        std::string out;
+        unsigned buffer = 0;
+        int bits = 0;
+        for (char c : value)
+        {
+            if (c == '=')
+                break;
+            const char* at = std::strchr(kB64, c);
+            if (!at || !*at)
+                return {};
+            buffer = (buffer << 6) | static_cast<unsigned>(at - kB64);
+            bits += 6;
+            if (bits >= 8)
+            {
+                bits -= 8;
+                out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+            }
+        }
+        return out;
+    }
+
+    std::string Base64Encode(const std::string& value)
+    {
+        std::string out;
+        for (size_t i = 0; i < value.size(); i += 3)
+        {
+            const unsigned v = (static_cast<unsigned char>(value[i]) << 16) |
+                               (i + 1 < value.size() ? static_cast<unsigned char>(value[i + 1]) << 8 : 0) |
+                               (i + 2 < value.size() ? static_cast<unsigned char>(value[i + 2]) : 0);
+            out.push_back(kB64[(v >> 18) & 63]);
+            out.push_back(kB64[(v >> 12) & 63]);
+            out.push_back(i + 1 < value.size() ? kB64[(v >> 6) & 63] : '=');
+            out.push_back(i + 2 < value.size() ? kB64[v & 63] : '=');
+        }
+        return out;
+    }
+#else
     std::string Base64Decode(std::string value)
     {
         std::replace(value.begin(), value.end(), '-', '+');
@@ -111,6 +183,7 @@ namespace
         if (!out.empty() && out.back() == '\0') out.pop_back();
         return out;
     }
+#endif
 
     bool ParseSynciUrl(const std::string& url, std::string& requestUrl, std::string& basicCredentials)
     {
@@ -283,7 +356,7 @@ void CloudSync::GoogleLoginWorker()
             "&redirect_uri=" + Encode(redirect) + "&response_type=code&scope=" + Encode(scope) +
             "&access_type=offline&prompt=consent&state=" + Encode(state);
         SetStatus("connexion Google ouverte dans le navigateur…");
-        ShellExecuteW(nullptr, L"open", Platform::Widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        Platform::OpenUrl(url);
         const auto acceptDeadline = std::chrono::steady_clock::now() + std::chrono::minutes(5);
         while (!m_stop && std::chrono::steady_clock::now() < acceptDeadline)
         {
@@ -347,7 +420,7 @@ void CloudSync::LoginWorker()
             m_verificationUrl = d.value("verification_uri", "https://microsoft.com/devicelogin");
             m_status = "ouvre l'adresse et saisis le code " + m_userCode;
         }
-        ShellExecuteW(nullptr, L"open", Platform::Widen(VerificationUrl()).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        Platform::OpenUrl(VerificationUrl());
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(expires);
         while (!m_stop && std::chrono::steady_clock::now() < deadline)
         {

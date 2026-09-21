@@ -2,7 +2,11 @@
 #include "Platform.h"
 #include "Process.h"
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+extern char** environ;
+#endif
 
 #include <algorithm>
 #include <cwctype>
@@ -16,7 +20,11 @@ namespace Console
     {
         switch (profile)
         {
+#ifdef _WIN32
         case Profile::Cmd: return "CMD";
+#else
+        case Profile::Cmd: return "sh";
+#endif
         case Profile::Gcloud: return "gcloud";
         default: return "PowerShell";
         }
@@ -24,7 +32,7 @@ namespace Console
 
     Profile ProfileFromName(const std::string& name)
     {
-        if (name == "CMD") return Profile::Cmd;
+        if (name == "CMD" || name == "sh") return Profile::Cmd;
         if (name == "gcloud") return Profile::Gcloud;
         return Profile::PowerShell;
     }
@@ -46,10 +54,16 @@ namespace Console
     std::vector<std::wstring> SecretEnvRemovals()
     {
         std::vector<std::wstring> out;
+#ifdef _WIN32
         wchar_t* env = GetEnvironmentStringsW();
         for (const wchar_t* p = env; *p; p += wcslen(p) + 1)
         {
             const std::wstring entry(p);
+#else
+        for (char** p = environ; p && *p; ++p)
+        {
+            const std::wstring entry = Platform::Widen(*p);
+#endif
             const size_t eq = entry.find(L'=', 1); // "=C:=C:\\…" entries start with '='
             if (eq == std::wstring::npos)
                 continue;
@@ -57,7 +71,9 @@ namespace Console
             if (IsSecretEnvName(name))
                 out.push_back(L"-" + name);
         }
+#ifdef _WIN32
         FreeEnvironmentStringsW(env);
+#endif
         return out;
     }
 
@@ -106,6 +122,32 @@ namespace Console
         if (profile == Profile::Gcloud && !ValidGcloud(command, p.error))
             return p;
 
+#ifndef _WIN32
+        // Linux: "CMD" and gcloud run through /bin/sh, PowerShell through pwsh when installed;
+        // the command goes into a script file, never through a quoted command line.
+        std::error_code linuxEc;
+        fs::create_directories(scratchDir, linuxEc);
+        const bool powershell = profile == Profile::PowerShell;
+        const std::wstring shell = powershell ? Process::FindOnPath(L"pwsh") : std::wstring(L"/bin/sh");
+        if (shell.empty())
+        {
+            p.error = "PowerShell (pwsh) n'est pas installé sur ce système.";
+            return p;
+        }
+        p.script = scratchDir / (Platform::Widen(Platform::NewId()) + (powershell ? L".ps1" : L".sh"));
+        std::string linuxError;
+        if (!Platform::WriteFileAtomic(p.script, command + "\n", linuxError))
+        {
+            p.error = "Préparation de la commande impossible : " + linuxError;
+            p.script.clear();
+            return p;
+        }
+        if (powershell)
+            p.args = {shell, L"-NoLogo", L"-NoProfile", L"-NonInteractive", L"-File", p.script.wstring()};
+        else
+            p.args = {shell, p.script.wstring()};
+        return p;
+#else
         wchar_t system[MAX_PATH];
         const UINT n = GetSystemDirectoryW(system, MAX_PATH);
         const fs::path systemDir = (n > 0 && n < MAX_PATH) ? fs::path(system) : fs::path(L"C:\\Windows\\System32");
@@ -146,5 +188,6 @@ namespace Console
         }
         p.args = {(systemDir / L"cmd.exe").wstring(), L"/d", L"/c", p.script.wstring()};
         return p;
+#endif
     }
 }
