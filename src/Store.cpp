@@ -403,7 +403,10 @@ bool Store::EnsureSelfImprovementSubserver(const std::string& codePath)
     {
         const Subserver previous = *existing;
         bool changed = false;
-        if (!codePath.empty() && existing->codePath != codePath)
+        std::error_code sourceEc;
+        const bool existingSourceMissing = existing->codePath.empty() ||
+                                           !fs::is_directory(Platform::Widen(existing->codePath), sourceEc);
+        if (!codePath.empty() && existingSourceMissing && existing->codePath != codePath)
         {
             existing->codePath = codePath;
             existing->mainPath = codePath;
