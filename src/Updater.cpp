@@ -68,6 +68,19 @@ namespace
         while (out.size() < 3) out.push_back(0);
         return out;
     }
+
+    std::wstring FindCMake()
+    {
+        std::wstring cmake = Process::FindOnPath(L"cmake.exe");
+        if (!cmake.empty()) return cmake;
+        for (const fs::path& candidate : {
+                 fs::path(L"C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"),
+                 fs::path(L"C:/Program Files/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"),
+                 fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"),
+                 fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe")})
+            if (fs::exists(candidate)) return candidate.wstring();
+        return {};
+    }
 }
 
 Updater::Updater(fs::path dataRoot)
@@ -103,7 +116,7 @@ void Updater::BuildLocal()
     if (m_thread.joinable()) m_thread.join();
     m_thread = std::thread([this] {
         auto done = [&](std::string text) { std::lock_guard<std::mutex> lock(m_mutex); m_status = std::move(text); m_busy = false; };
-        const std::wstring cmake = Process::FindOnPath(L"cmake.exe");
+        const std::wstring cmake = FindCMake();
         if (cmake.empty()) { done("Compilation locale impossible : CMake n'est pas installé ou n'est pas dans PATH."); return; }
         std::atomic<bool> cancel{false}; std::string output;
         const fs::path build = m_source / "build-local";
