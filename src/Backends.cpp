@@ -15,6 +15,8 @@
 #endif
 
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -22,6 +24,20 @@
 
 using nlohmann::json;
 namespace fs = std::filesystem;
+
+namespace
+{
+    // fopen on a filesystem path, wide on Windows, native (UTF-8) on Linux. 0 on success.
+    int OpenFile(FILE** f, const fs::path& path, const char* mode)
+    {
+#ifdef _WIN32
+        return _wfopen_s(f, path.c_str(), Platform::Widen(mode).c_str());
+#else
+        *f = std::fopen(path.c_str(), mode);
+        return *f ? 0 : 1;
+#endif
+    }
+}
 
 namespace
 {
@@ -45,7 +61,11 @@ namespace
     {
         const std::time_t t = static_cast<std::time_t>(epochSeconds);
         std::tm utc{};
+#ifdef _WIN32
         gmtime_s(&utc, &t);
+#else
+        gmtime_r(&t, &utc);
+#endif
         char buf[32];
         std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &utc);
         return buf;
@@ -500,7 +520,7 @@ namespace
         if (!fs::exists(policy))
         {
             FILE* f = nullptr;
-            if (_wfopen_s(&f, policy.c_str(), L"wb") == 0 && f)
+            if (OpenFile(&f, policy, "wb") == 0 && f)
             {
                 const char* toml = "[[rule]]\ntoolName = \"*\"\ndecision = \"deny\"\npriority = 999\n";
                 fwrite(toml, 1, strlen(toml), f);
@@ -973,7 +993,7 @@ TurnResult RunCodeWork(const std::string& aiId, const std::string& model, const 
                                 Platform::Widen("agentchats-gemini-work-" + Platform::NewId() + ".toml");
         {
             FILE* f = nullptr;
-            if (_wfopen_s(&f, policy.c_str(), L"wb") == 0 && f)
+            if (OpenFile(&f, policy, "wb") == 0 && f)
             {
                 fwrite(toml.data(), 1, toml.size(), f);
                 fclose(f);
@@ -1280,7 +1300,7 @@ LoginStatus CheckLogin(const std::string& aiId)
         {
             FILE* f = nullptr;
             std::string content;
-            if (_wfopen_s(&f, settings.c_str(), L"rb") == 0 && f)
+            if (OpenFile(&f, settings, "rb") == 0 && f)
             {
                 char buf[4096];
                 size_t n;

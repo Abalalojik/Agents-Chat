@@ -2,6 +2,7 @@
 #include "Platform.h"
 #include "Secrets.h"
 
+#include <cwchar>
 #include <cwctype>
 #include <algorithm>
 #include <fstream>
@@ -11,6 +12,19 @@
 
 using nlohmann::json;
 namespace fs = std::filesystem;
+
+namespace
+{
+    // Path prefixes: case-insensitive on Windows, case-sensitive on Linux (as the file systems are).
+    int PathPrefixCompare(const wchar_t* a, const wchar_t* b, size_t n)
+    {
+#ifdef _WIN32
+        return _wcsnicmp(a, b, n);
+#else
+        return wcsncmp(a, b, n);
+#endif
+    }
+}
 
 namespace Tools
 {
@@ -254,7 +268,7 @@ namespace Tools
         // Compare with a trailing separator: "C:\Vault2" must not pass as inside "C:\Vault".
         if (!b.empty() && b.back() != L'\\')
             b.push_back(L'\\');
-        if (f.size() < b.size() || _wcsnicmp(f.c_str(), b.c_str(), b.size()) != 0)
+        if (f.size() < b.size() || PathPrefixCompare(f.c_str(), b.c_str(), b.size()) != 0)
             return {};
         return full;
     }
@@ -314,7 +328,7 @@ namespace Tools
             const std::wstring f = fs::weakly_canonical(file, ec).wstring();
             if (!r.empty() && r.back() != L'\\')
                 r.push_back(L'\\');
-            return f.size() >= r.size() && _wcsnicmp(f.c_str(), r.c_str(), r.size()) == 0;
+            return f.size() >= r.size() && PathPrefixCompare(f.c_str(), r.c_str(), r.size()) == 0;
         }
 
         size_t Depth(const fs::path& p)
@@ -476,7 +490,12 @@ namespace Tools
                         const std::time_t epoch = static_cast<std::time_t>(transaction.value("posted", 0LL));
                         if (epoch > 0)
                         {
-                            std::tm local{}; localtime_s(&local, &epoch);
+                            std::tm local{};
+#ifdef _WIN32
+                            localtime_s(&local, &epoch);
+#else
+                            localtime_r(&epoch, &local);
+#endif
                             std::ostringstream formatted; formatted << std::put_time(&local, "%Y-%m-%d"); date = formatted.str();
                         }
                         out += "[" + date + "] " + name + " — " + amount + " " + currency + " — " +

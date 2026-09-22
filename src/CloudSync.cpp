@@ -45,6 +45,7 @@ namespace
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 
 using nlohmann::json;
 namespace fs = std::filesystem;
@@ -102,7 +103,11 @@ namespace
         const auto now = std::chrono::system_clock::now() + std::chrono::hours(24 * dayOffset);
         const std::time_t t = std::chrono::system_clock::to_time_t(now);
         std::tm utc{};
+#ifdef _WIN32
         gmtime_s(&utc, &t);
+#else
+        gmtime_r(&t, &utc);
+#endif
         std::ostringstream out;
         out << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
         return out.str();
@@ -363,7 +368,7 @@ void CloudSync::GoogleLoginWorker()
             clientSocket = accept(listener, nullptr, nullptr);
             if (clientSocket != INVALID_SOCKET) break;
             if (WSAGetLastError() != WSAEWOULDBLOCK) break;
-            Sleep(100);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         if (clientSocket == INVALID_SOCKET) throw std::runtime_error("connexion Google expirée");
         char buf[16384]; const int n = recv(clientSocket, buf, sizeof(buf) - 1, 0);
@@ -424,7 +429,7 @@ void CloudSync::LoginWorker()
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(expires);
         while (!m_stop && std::chrono::steady_clock::now() < deadline)
         {
-            for (int i = 0; i < interval * 10 && !m_stop; ++i) Sleep(100);
+            for (int i = 0; i < interval * 10 && !m_stop; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
             const Http::Response token = FormPost("https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
                 "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&client_id=" + Encode(client) +
                 "&device_code=" + Encode(device), m_stop);
