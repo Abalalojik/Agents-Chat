@@ -439,14 +439,19 @@ namespace Platform
 
     std::string PickFolder(void*, const wchar_t* title)
     {
-        // zenity when present (GNOME and most desktops); otherwise the caller keeps its text field.
-        if (std::system("command -v zenity >/dev/null 2>&1") != 0)
-            return {};
+        // zenity (GNOME) or kdialog (KDE Plasma, SteamOS desktop); otherwise the caller keeps its text field.
         std::string safeTitle;
         for (char c : Narrow(title ? title : L""))
             if (c != '\'' && c != '\\')
                 safeTitle.push_back(c);
-        FILE* pipe = popen(("zenity --file-selection --directory --title='" + safeTitle + "' 2>/dev/null").c_str(), "r");
+        std::string command;
+        if (std::system("command -v zenity >/dev/null 2>&1") == 0)
+            command = "zenity --file-selection --directory --title='" + safeTitle + "' 2>/dev/null";
+        else if (std::system("command -v kdialog >/dev/null 2>&1") == 0)
+            command = "kdialog --getexistingdirectory \"$HOME\" --title '" + safeTitle + "' 2>/dev/null";
+        else
+            return {};
+        FILE* pipe = popen(command.c_str(), "r");
         if (!pipe)
             return {};
         std::string result;

@@ -37,10 +37,12 @@ echo "Journaux complets dans le conteneur : $OUT"
 if [ "${2:-}" = "--full" ]; then
     echo
     echo "=== Construction complète (CMake + Ninja) ==="
-    if cmake -S "$SRC" -B /tmp/build -G Ninja -DCMAKE_BUILD_TYPE=Release >/tmp/build-configure.log 2>&1 &&
-       cmake --build /tmp/build 2>&1 | tee /tmp/build.log | grep -E "error|warning" | head -40; [ "${PIPESTATUS[0]}" -eq 0 ]; then
+    # A writable copy, built inside its own tree like on a real Linux machine (the mount stays read-only).
+    rm -rf /tmp/src && cp -r "$SRC" /tmp/src && rm -rf /tmp/src/build /tmp/src/build-*
+    if cmake -S /tmp/src -B /tmp/src/build -G Ninja -DCMAKE_BUILD_TYPE=Release >/tmp/build-configure.log 2>&1 &&
+       cmake --build /tmp/src/build 2>&1 | tee /tmp/build.log | grep -E "error|warning" | head -40; [ "${PIPESTATUS[0]}" -eq 0 ]; then
         echo "Construction réussie. Tests :"
-        (cd /tmp && /tmp/build/AgentChatsTests)
+        (cd /tmp && /tmp/src/build/AgentChatsTests)
         exit $?
     else
         tail -20 /tmp/build-configure.log

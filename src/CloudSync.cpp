@@ -378,8 +378,12 @@ void CloudSync::GoogleLoginWorker()
         if (q == std::string::npos || space == std::string::npos) throw std::runtime_error("retour OAuth Google invalide");
         const std::string query = request.substr(q + 1, space - q - 1);
         auto param = [&](const std::string& name) {
-            const std::string key = name + "="; size_t p = query.find(key);
-            if (p == std::string::npos) return std::string(); p += key.size(); size_t e = query.find('&', p);
+            const std::string key = name + "=";
+            size_t p = query.find(key);
+            if (p == std::string::npos)
+                return std::string();
+            p += key.size();
+            const size_t e = query.find('&', p);
             return Decode(query.substr(p, e == std::string::npos ? std::string::npos : e - p));
         };
         const std::string html = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"

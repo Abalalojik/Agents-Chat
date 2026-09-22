@@ -204,8 +204,13 @@ int main(int argc, char** argv)
     CHECK(!Tools::Confine(vault, "lore/persos/Lilith.md").empty());
     CHECK(Tools::Confine(vault, "../Jalyra2/secret.md").empty());       // escape with ..
     CHECK(Tools::Confine(vault, "..\\Jalyra2\\secret.md").empty());
+#ifdef _WIN32
     CHECK(Tools::Confine(vault, "C:\\Windows\\win.ini").empty());       // absolute
     CHECK(Tools::Confine(vault, "\\Windows\\win.ini").empty());          // rooted
+#else
+    CHECK(Tools::Confine(vault, "/etc/passwd").empty());                // absolute
+    CHECK(Tools::Confine(vault, "//etc/passwd").empty());
+#endif
     CHECK(Tools::Confine(vault, ".obsidian/app.json").empty());          // hidden config
     CHECK(Tools::Confine(vault, "persos/../../Jalyra2/secret.md").empty());
     CHECK(Tools::Confine(vault, "").empty() || Tools::Confine(vault, "") == fs::weakly_canonical(vault, ec)); // root itself at most

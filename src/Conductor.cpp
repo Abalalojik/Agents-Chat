@@ -339,7 +339,7 @@ void Conductor::Run(JobInput in)
             continue;
         }
         post(ConductorEvent::Kind::TurnDone, ai, finalText);
-        Message m{Platform::NewId(), ai, finalText, Platform::NowIsoUtc()};
+        Message m{Platform::NewId(), ai, finalText, Platform::NowIsoUtc(), "", ""};
         history.push_back(m);
         ++turns;
 

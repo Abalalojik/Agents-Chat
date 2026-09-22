@@ -15,6 +15,9 @@ namespace fs = std::filesystem;
 
 namespace
 {
+    // The native separator: backslash on Windows, '/' on Linux.
+    constexpr wchar_t kSeparator = static_cast<wchar_t>(std::filesystem::path::preferred_separator);
+
     // Path prefixes: case-insensitive on Windows, case-sensitive on Linux (as the file systems are).
     int PathPrefixCompare(const wchar_t* a, const wchar_t* b, size_t n)
     {
@@ -121,7 +124,7 @@ namespace Tools
                 const fs::path canonicalRule = fs::weakly_canonical(candidate, ec);
                 std::wstring base = canonicalRule.wstring();
                 const std::wstring value = canonicalTarget.wstring();
-                if (!base.empty() && base.back() != L'\\') base += L'\\';
+                if (!base.empty() && base.back() != kSeparator) base += kSeparator;
                 if (value == canonicalRule.wstring() || value.rfind(base, 0) == 0)
                     return rule.mode;
             }
@@ -266,8 +269,8 @@ namespace Tools
         std::wstring b = base.wstring();
         const std::wstring f = full.wstring();
         // Compare with a trailing separator: "C:\Vault2" must not pass as inside "C:\Vault".
-        if (!b.empty() && b.back() != L'\\')
-            b.push_back(L'\\');
+        if (!b.empty() && b.back() != kSeparator)
+            b.push_back(kSeparator);
         if (f.size() < b.size() || PathPrefixCompare(f.c_str(), b.c_str(), b.size()) != 0)
             return {};
         return full;
@@ -326,8 +329,8 @@ namespace Tools
             std::error_code ec;
             std::wstring r = fs::weakly_canonical(root, ec).wstring();
             const std::wstring f = fs::weakly_canonical(file, ec).wstring();
-            if (!r.empty() && r.back() != L'\\')
-                r.push_back(L'\\');
+            if (!r.empty() && r.back() != kSeparator)
+                r.push_back(kSeparator);
             return f.size() >= r.size() && PathPrefixCompare(f.c_str(), r.c_str(), r.size()) == 0;
         }
 

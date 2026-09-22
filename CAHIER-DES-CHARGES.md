@@ -206,4 +206,7 @@ PR), contexte court local.
 
 Test UI de bout en bout fait le 21 septembre 2026 (auto-amélioration : compilation, installation, retour arrière).
 
-À achever/prouver : essai visuel de la console, relais d'invite, atelier de fine-tuning, et port Linux natif.
+Port Linux : compilé et testé (tests automatisés) dans Ubuntu 24.04 le 22 septembre 2026 ; `linux/check.ps1 -Full`.
+
+À achever/prouver : essai du port Linux sur un vrai bureau (SteamOS/KDE visé), essai visuel de la console,
+relais d'invite, atelier de fine-tuning.

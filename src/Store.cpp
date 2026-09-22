@@ -261,7 +261,7 @@ bool Store::Load()
             for (const json& t : ReadJson(m_root / "tasks.json").value("tasks", json::array()))
             {
                 m_tasks.push_back({t.value("id", ""), t.value("channelId", ""), t.value("title", ""), t.value("assignee", ""),
-                                   t.value("status", "a_faire"), t.value("createdBy", ""), t.value("updatedAt", "")});
+                                   t.value("status", "a_faire"), t.value("createdBy", ""), t.value("updatedAt", ""), 0, "", ""});
                 m_tasks.back().issueNumber = t.value("issueNumber", 0);
                 m_tasks.back().issueUrl = t.value("issueUrl", "");
                 m_tasks.back().issueState = t.value("issueState", "");
@@ -1065,7 +1065,7 @@ Store::IssueImport Store::ImportIssues(const std::string& channelId, const std::
         }
         else if (issue.state == "OPEN")
         {
-            TaskItem t{Platform::NewId(), channelId, title, "", "a_faire", "github", Platform::NowIsoUtc()};
+            TaskItem t{Platform::NewId(), channelId, title, "", "a_faire", "github", Platform::NowIsoUtc(), 0, "", ""};
             t.issueNumber = issue.number;
             t.issueUrl = issue.url;
             t.issueState = issue.state;
@@ -1084,7 +1084,7 @@ Store::IssueImport Store::ImportIssues(const std::string& channelId, const std::
 const TaskItem* Store::AddTask(const std::string& channelId, const std::string& title, const std::string& assignee,
                                const std::string& createdBy)
 {
-    m_tasks.push_back({Platform::NewId(), channelId, title, assignee, "a_faire", createdBy, Platform::NowIsoUtc()});
+    m_tasks.push_back({Platform::NewId(), channelId, title, assignee, "a_faire", createdBy, Platform::NowIsoUtc(), 0, "", ""});
     if (!SaveTasks())
     {
         m_tasks.pop_back();

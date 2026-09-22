@@ -2,10 +2,13 @@
 
 ## Verdict
 
-Port **écrit, pas encore vérifié** (21 septembre 2026). Chaque couche Windows a désormais son côté Linux,
-derrière `#ifdef _WIN32`, et le build Windows reste identique (zéro avertissement, tests verts). Aucune
-compilation Linux réelle n'a encore eu lieu : tant que `linux/check.ps1` n'est pas passé, Linux n'est pas
-déclaré disponible (principe 6 du cahier des charges).
+**Compilé et testé sous Linux** le 22 septembre 2026 (Ubuntu 24.04, g++ 13, dans Docker) : les 21 fichiers
+compilent, le build CMake complet passe sans avertissement et tous les tests de `AgentChatsTests` passent.
+Le build Windows reste identique (zéro avertissement, tests verts).
+
+**Pas encore essayé sur un vrai bureau Linux** : la fenêtre SDL2/OpenGL, le trousseau (libsecret), la
+corbeille (`gio trash`), l'ouverture des liens, le choix de dossier et les consoles de connexion des CLI
+demandent une session graphique, absente du conteneur. Linux n'est déclaré disponible qu'après cet essai.
 
 Vérifier depuis Windows, avec Docker Desktop lancé (dépôt monté en lecture seule) :
 
@@ -17,7 +20,7 @@ powershell -File linux\check.ps1 -Full  # vrai build CMake + Ninja, puis les tes
 Choix faits pour Linux : libcurl (HTTP), trousseau Secret Service via libsecret (secrets), OpenSSL
 (signatures, mêmes formats de clé et de signature que BCrypt), `fork`/`execve` avec groupe de processus
 (annulation et délai tuent tout l'arbre ; **plafond mémoire pas encore appliqué**, un cgroup est prévu),
-`gio trash` (corbeille), `xdg-open` (liens), `zenity` (choix de dossier), terminal du bureau (connexion
+`gio trash` (corbeille), `xdg-open` (liens), `zenity` ou `kdialog` (choix de dossier), terminal du bureau (connexion
 des CLI), timer systemd utilisateur (synchronisation), SDL2 + OpenGL 3 (fenêtre). La mise à jour se
 remplace en place et démarre au lancement suivant.
 
